@@ -1,7 +1,3 @@
-# SPDX-FileCopyrightText: Copyright (c) 2024-25, NVIDIA CORPORATION & AFFILIATES.
-# All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-
 """
 In-process runmode.
 
@@ -47,16 +43,11 @@ except Exception as e:  # pragma: no cover
 
 from ..utils.convert import SUPPORTED_EXTENSIONS, convert_to_pdf_bytes
 from ..ingest import Ingestor
-from ..params import EmbedParams
-from ..params import ExtractParams
-from ..params import HtmlChunkParams
-from ..params import IngestExecuteParams
-from ..params import TextChunkParams
-from ..params import VdbUploadParams
 from ..pdf.extract import pdf_extraction
 from ..pdf.split import _split_pdf_to_single_page_bytes, pdf_path_to_pages_df
 from ..txt import txt_file_to_chunks_df
 from ..html import html_file_to_chunks_df
+from ..audio import audio_file_to_transcript_df
 
 _CONTENT_COLUMNS = ("table", "chart", "infographic")
 
@@ -967,8 +958,8 @@ def _print_ingest_summary(results: list, elapsed_s: float) -> None:
 class InProcessIngestor(Ingestor):
     RUN_MODE = "inprocess"
 
-    def __init__(self, documents: Optional[List[str]] = None) -> None:
-        super().__init__(documents=documents)
+    def __init__(self, documents: Optional[List[str]] = None, **kwargs: Any) -> None:
+        super().__init__(documents=documents, **kwargs)
 
         # Keep backwards-compatibility with code that inspects `Ingestor._documents`
         # by ensuring both names refer to the same list.
@@ -1014,7 +1005,7 @@ class InProcessIngestor(Ingestor):
 
         return self
 
-    def extract(self, params: ExtractParams) -> "InProcessIngestor":
+    def extract(self, **kwargs: Any) -> "InProcessIngestor":
         """
         Configure extraction for in-process execution (skeleton).
 
@@ -1026,7 +1017,6 @@ class InProcessIngestor(Ingestor):
         # (e.g. `extract_text`, `dpi`, etc). Downstream model stages do NOT necessarily
         # accept the same keyword arguments. Keep per-stage kwargs isolated.
 
-        kwargs = params.model_dump(mode="python")
         extract_kwargs = dict(kwargs)
         # Downstream in-process stages (page elements / table / chart / infographic) assume
         # `page_image.image_b64` exists. Ensure PDF extraction emits a page image unless
@@ -1113,18 +1103,23 @@ class InProcessIngestor(Ingestor):
             if ocr_invoke_url:
                 self._tasks.append((ocr_page_elements, {"model": None, **ocr_flags}))
             else:
-                ocr_model_dir = (
-                    kwargs.get("ocr_model_dir")
-                    or os.environ.get("RETRIEVER_NEMOTRON_OCR_MODEL_DIR", "").strip()
-                    or os.environ.get("NEMOTRON_OCR_MODEL_DIR", "").strip()
-                    or os.environ.get("NEMOTRON_OCR_V1_MODEL_DIR", "").strip()
-                )
-                model = NemotronOCRV1(model_dir=str(ocr_model_dir)) if ocr_model_dir else NemotronOCRV1()
-                self._tasks.append((ocr_page_elements, {"model": model, **ocr_flags}))
+                ocr_model_dir = os.environ.get("NEMOTRON_OCR_MODEL_DIR", "")
+                if not ocr_model_dir:
+                    raise RuntimeError(
+                        "NEMOTRON_OCR_MODEL_DIR environment variable must be set to "
+                        "the path of the Nemotron OCR v1 model directory."
+                    )
+                self._tasks.append((ocr_page_elements, {"model": NemotronOCRV1(model_dir=ocr_model_dir), **ocr_flags}))
 
         return self
 
-    def extract_txt(self, params: TextChunkParams) -> "InProcessIngestor":
+    def extract_txt(
+        self,
+        max_tokens: int = 512,
+        overlap_tokens: int = 0,
+        encoding: str = "utf-8",
+        **kwargs: Any,
+    ) -> "InProcessIngestor":
         """
         Configure txt ingestion: tokenizer-based chunking only (no PDF extraction).
 
@@ -1132,10 +1127,21 @@ class InProcessIngestor(Ingestor):
         Do not call .extract() when using .extract_txt().
         """
         self._pipeline_type = "txt"
-        self._extract_txt_kwargs = params.model_dump(mode="python")
+        self._extract_txt_kwargs = {
+            "max_tokens": max_tokens,
+            "overlap_tokens": overlap_tokens,
+            "encoding": encoding,
+            **kwargs,
+        }
         return self
 
-    def extract_html(self, params: HtmlChunkParams) -> "InProcessIngestor":
+    def extract_html(
+        self,
+        max_tokens: int = 512,
+        overlap_tokens: int = 0,
+        encoding: str = "utf-8",
+        **kwargs: Any,
+    ) -> "InProcessIngestor":
         """
         Configure HTML ingestion: markitdown -> markdown -> tokenizer chunking (no PDF extraction).
 
@@ -1143,10 +1149,51 @@ class InProcessIngestor(Ingestor):
         Do not call .extract() when using .extract_html().
         """
         self._pipeline_type = "html"
-        self._extract_html_kwargs = params.model_dump(mode="python")
+        self._extract_html_kwargs = {
+            "max_tokens": max_tokens,
+            "overlap_tokens": overlap_tokens,
+            "encoding": encoding,
+            **kwargs,
+        }
         return self
 
-    def embed(self, params: EmbedParams) -> "InProcessIngestor":
+    def extract_audio(
+        self,
+        grpc_endpoint: str = "audio:50051",
+        auth_token: Optional[str] = None,
+        function_id: Optional[str] = None,
+        use_ssl: Optional[bool] = None,
+        ssl_cert: Optional[str] = None,
+        segment_audio: bool = False,
+        max_tokens: Optional[int] = None,
+        overlap_tokens: int = 0,
+        tokenizer_model_id: Optional[str] = None,
+        tokenizer_cache_dir: Optional[str] = None,
+        **kwargs: Any,
+    ) -> "InProcessIngestor":
+        """
+        Configure audio ingestion: transcribe via Riva/Parakeet NIM.
+
+        Use with .files("*.mp3").extract_audio(...).embed().vdb_upload().ingest().
+        Do not call .extract() when using .extract_audio().
+        """
+        self._pipeline_type = "audio"
+        self._extract_audio_kwargs = {
+            "grpc_endpoint": grpc_endpoint,
+            "auth_token": auth_token,
+            "function_id": function_id,
+            "use_ssl": use_ssl,
+            "ssl_cert": ssl_cert,
+            "segment_audio": segment_audio,
+            "max_tokens": max_tokens,
+            "overlap_tokens": overlap_tokens,
+            "tokenizer_model_id": tokenizer_model_id,
+            "tokenizer_cache_dir": tokenizer_cache_dir,
+            **kwargs,
+        }
+        return self
+
+    def embed(self, **kwargs: Any) -> "InProcessIngestor":
         """
         Configure embedding for in-process execution.
 
@@ -1161,10 +1208,7 @@ class InProcessIngestor(Ingestor):
         # gets its own embedding vector (mirrors nv-ingest per-element embeddings).
         self._tasks.append((explode_content_to_rows, {}))
 
-        embed_kwargs = {
-            **params.model_dump(mode="python", exclude={"runtime", "batch_tuning", "fused_tuning"}, exclude_none=True),
-            **params.runtime.model_dump(mode="python", exclude_none=True),
-        }
+        embed_kwargs = dict(kwargs)
         if "embedding_endpoint" not in embed_kwargs and embed_kwargs.get("embed_invoke_url"):
             embed_kwargs["embedding_endpoint"] = embed_kwargs.get("embed_invoke_url")
 
@@ -1218,7 +1262,7 @@ class InProcessIngestor(Ingestor):
         self._tasks.append((save_dataframe_to_disk_json, {"output_directory": str(output_directory)}))
         return self
 
-    def vdb_upload(self, params: VdbUploadParams | None = None) -> "InProcessIngestor":
+    def vdb_upload(self, purge_results_after_upload: bool = True, **kwargs: Any) -> "InProcessIngestor":
         """
         Upload the (embedding-enriched) results to a vector DB (LanceDB).
 
@@ -1244,9 +1288,8 @@ class InProcessIngestor(Ingestor):
         Notes:
         - `purge_results_after_upload` is accepted for API parity but is not used in inprocess mode.
         """
-        p = params or VdbUploadParams()
-        _ = p.purge_results_after_upload  # parity with interface; inprocess does not purge by default
-        self._tasks.append((upload_embeddings_to_lancedb_inprocess, p.lancedb.model_dump(mode="python")))
+        _ = purge_results_after_upload  # parity with interface; inprocess does not purge by default
+        self._tasks.append((upload_embeddings_to_lancedb_inprocess, dict(kwargs)))
         return self
 
     # Tasks that run once on combined results (after all docs). All others run per-doc.
@@ -1263,14 +1306,18 @@ class InProcessIngestor(Ingestor):
         post_tasks = [(f, k) for f, k in self._tasks if f in self._POST_TASKS]
         return per_doc_tasks, post_tasks
 
-    def ingest(self, params: IngestExecuteParams | None = None) -> list[Any]:
-        run_params = params or IngestExecuteParams()
-        show_progress = run_params.show_progress
-        _ = (run_params.return_failures, run_params.save_to_disk, run_params.return_traces)
-        parallel = run_params.parallel
-        max_workers = run_params.max_workers
-        gpu_devices = list(run_params.gpu_devices) if run_params.gpu_devices else None
-        page_chunk_size = run_params.page_chunk_size
+    def ingest(
+        self,
+        show_progress: bool = False,
+        return_failures: bool = False,
+        save_to_disk: bool = False,
+        return_traces: bool = False,
+        parallel: bool = False,
+        max_workers: int | None = None,
+        gpu_devices: list[str] | None = None,
+        page_chunk_size: int = 32,
+        **_: Any,
+    ) -> list[Any]:
 
         _start = time.perf_counter()
 
@@ -1531,12 +1578,17 @@ class InProcessIngestor(Ingestor):
         elif self._pipeline_type == "html":
 
             def _loader(p: str) -> pd.DataFrame:
-                return html_file_to_chunks_df(p, params=HtmlChunkParams(**self._extract_html_kwargs))
+                return html_file_to_chunks_df(p, **self._extract_html_kwargs)
+
+        elif self._pipeline_type == "audio":
+
+            def _loader(p: str) -> pd.DataFrame:
+                return audio_file_to_transcript_df(p, **self._extract_audio_kwargs)
 
         else:
 
             def _loader(p: str) -> pd.DataFrame:
-                return txt_file_to_chunks_df(p, params=TextChunkParams(**self._extract_txt_kwargs))
+                return txt_file_to_chunks_df(p, **self._extract_txt_kwargs)
 
         for doc_path in doc_iter:
             initial_df = _loader(doc_path)
