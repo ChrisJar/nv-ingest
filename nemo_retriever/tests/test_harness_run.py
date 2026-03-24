@@ -191,6 +191,42 @@ def test_build_command_applies_page_plus_one_adapter(tmp_path: Path) -> None:
     assert "q,doc_name_1" in csv_contents
 
 
+def test_build_command_supports_audio_recall_options(tmp_path: Path) -> None:
+    dataset_dir = tmp_path / "dataset"
+    dataset_dir.mkdir()
+    query_csv = tmp_path / "video_retrieval_eval_gt.csv"
+    query_csv.write_text(
+        "name,question,answer_modality,start_time,end_time\nclip_a,q,Audio only,1.0,2.0\n",
+        encoding="utf-8",
+    )
+
+    cfg = HarnessConfig(
+        dataset_dir=str(dataset_dir),
+        dataset_label="audio_retrieval",
+        preset="single_gpu",
+        query_csv=str(query_csv),
+        input_type="audio",
+        recall_match_mode="audio_time_window",
+        recall_adapter="audio_retrieval_gt",
+        segment_audio=True,
+        audio_grpc_endpoint="localhost:50051",
+        audio_function_id="fn-123",
+    )
+    cmd, runtime_dir, _detection_file, effective_query_csv = _build_command(cfg, tmp_path, run_id="r1")
+
+    assert effective_query_csv.parent == runtime_dir
+    assert effective_query_csv.name == "query_adapter.audio_retrieval_gt.csv"
+    assert "--input-type" in cmd
+    assert cmd[cmd.index("--input-type") + 1] == "audio"
+    assert "--recall-match-mode" in cmd
+    assert cmd[cmd.index("--recall-match-mode") + 1] == "audio_time_window"
+    assert "--segment-audio" in cmd
+    assert "--audio-grpc-endpoint" in cmd
+    assert cmd[cmd.index("--audio-grpc-endpoint") + 1] == "localhost:50051"
+    assert "--audio-function-id" in cmd
+    assert cmd[cmd.index("--audio-function-id") + 1] == "fn-123"
+
+
 def test_normalize_recall_metric_key_removes_duplicate_prefix() -> None:
     assert _normalize_recall_metric_key("recall@1") == "recall_1"
     assert _normalize_recall_metric_key("recall@10") == "recall_10"
@@ -506,6 +542,10 @@ def test_run_single_writes_results_with_run_metadata(monkeypatch, tmp_path: Path
             "recall_match_mode": cfg.recall_match_mode,
             "recall_adapter": cfg.recall_adapter,
             "evaluation_mode": cfg.evaluation_mode,
+            "segment_audio": cfg.segment_audio,
+            "audio_grpc_endpoint": cfg.audio_grpc_endpoint,
+            "audio_http_endpoint": cfg.audio_http_endpoint,
+            "audio_function_id": cfg.audio_function_id,
             "beir_loader": cfg.beir_loader,
             "beir_dataset_name": cfg.beir_dataset_name,
             "beir_split": cfg.beir_split,

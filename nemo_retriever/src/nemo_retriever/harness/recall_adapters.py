@@ -71,9 +71,37 @@ def _adapt_financebench_json(query_json: Path, output_csv: Path) -> Path:
     return output_csv
 
 
+def _adapt_audio_retrieval_gt(query_csv: Path, output_csv: Path) -> Path:
+    df = pd.read_csv(query_csv)
+    required = {"question", "name", "start_time", "end_time", "answer_modality"}
+    missing = required.difference(df.columns)
+    if missing:
+        raise ValueError(
+            "audio_retrieval_gt adapter requires "
+            "['question','name','start_time','end_time','answer_modality'] columns "
+            f"(missing: {sorted(missing)}) in {query_csv}"
+        )
+
+    filtered = df.loc[df["answer_modality"].astype(str).str.strip().eq("Audio only")]
+    if filtered.empty:
+        raise ValueError(f"audio_retrieval_gt adapter found no 'Audio only' rows in {query_csv}")
+
+    normalized = pd.DataFrame(
+        {
+            "query": filtered["question"].astype(str),
+            "expected_source": filtered["name"].astype(str),
+            "start_time": pd.to_numeric(filtered["start_time"], errors="raise"),
+            "end_time": pd.to_numeric(filtered["end_time"], errors="raise"),
+        }
+    )
+    normalized.to_csv(output_csv, index=False)
+    return output_csv
+
+
 _ADAPTER_HANDLERS: dict[str, tuple[Callable[[Path, Path], Path], str]] = {
     "page_plus_one": (_adapt_page_plus_one, "query_adapter.page_plus_one.csv"),
     "financebench_json": (_adapt_financebench_json, "query_adapter.financebench_json.csv"),
+    "audio_retrieval_gt": (_adapt_audio_retrieval_gt, "query_adapter.audio_retrieval_gt.csv"),
 }
 
 

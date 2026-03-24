@@ -17,6 +17,8 @@ logger = logging.getLogger(__name__)
 import numpy as np
 import pandas as pd
 
+AUDIO_TIME_WINDOW_TOLERANCE_S = 2.0
+
 
 @dataclass(frozen=True)
 class RecallConfig:
@@ -59,6 +61,26 @@ def _normalize_pdf_name(value: str) -> str:
     return str(value).replace(".pdf", "")
 
 
+def _normalize_source_name(value: object) -> str:
+    raw = str(value).strip()
+    if not raw:
+        return ""
+    path = Path(raw)
+    return path.stem if path.suffix else path.name
+
+
+def _normalize_audio_seconds(value: object) -> float | None:
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return None
+    # Support notebook-style millisecond metadata while preserving the
+    # second-based values emitted by the current audio ASR actor.
+    if abs(seconds) >= 10000.0:
+        seconds /= 1000.0
+    return seconds
+
+
 def _normalize_query_df(df: pd.DataFrame, *, match_mode: str) -> pd.DataFrame:
     """
     Normalize a query CSV into:
@@ -72,11 +94,35 @@ def _normalize_query_df(df: pd.DataFrame, *, match_mode: str) -> pd.DataFrame:
       - pdf_only:
         - query,expected_pdf
         - query,pdf
+      - audio_time_window:
+        - query,expected_source,start_time,end_time
+        - question,name,start_time,end_time
     """
-    if match_mode not in {"pdf_page", "pdf_only"}:
+    if match_mode not in {"pdf_page", "pdf_only", "audio_time_window"}:
         raise ValueError(f"Unsupported recall match mode: {match_mode}")
 
     df = df.copy()
+
+    if match_mode == "audio_time_window":
+        if "question" in df.columns and "query" not in df.columns:
+            df = df.rename(columns={"question": "query"})
+        if "name" in df.columns and "expected_source" not in df.columns:
+            df = df.rename(columns={"name": "expected_source"})
+
+        required = {"query", "expected_source", "start_time", "end_time"}
+        missing = required.difference(df.columns)
+        if missing:
+            raise KeyError(
+                "For audio_time_window mode, query data must contain "
+                "['query','expected_source','start_time','end_time'] "
+                f"(missing: {sorted(missing)})"
+            )
+
+        df["expected_source"] = df["expected_source"].astype(str).apply(_normalize_source_name)
+        df["start_time"] = pd.to_numeric(df["start_time"], errors="raise")
+        df["end_time"] = pd.to_numeric(df["end_time"], errors="raise")
+        df["golden_answer"] = df["expected_source"]
+        return df
 
     if "query" not in df.columns:
         raise KeyError("Query CSV must contain a 'query' column.")
@@ -205,6 +251,51 @@ def _hits_to_keys(raw_hits: List[List[Dict[str, Any]]]) -> List[List[str]]:
     return retrieved_keys
 
 
+def _audio_hit_to_window(hit: Dict[str, Any]) -> Dict[str, Any] | None:
+    raw_meta = hit.get("metadata", {})
+    if isinstance(raw_meta, dict):
+        meta = raw_meta
+    else:
+        try:
+            meta = json.loads(raw_meta or "{}")
+        except Exception:
+            meta = {}
+    raw_source = hit.get("source", {})
+    if isinstance(raw_source, dict):
+        source = raw_source
+    else:
+        try:
+            source = json.loads(raw_source or "{}")
+        except Exception:
+            source = {}
+
+    source_id = hit.get("source_id") or source.get("source_id") or hit.get("path")
+    source_name = _normalize_source_name(source_id)
+    start_time = _normalize_audio_seconds(meta.get("segment_start"))
+    end_time = _normalize_audio_seconds(meta.get("segment_end"))
+    if not source_name or start_time is None or end_time is None:
+        return None
+    return {
+        "source": source_name,
+        "start_time": start_time,
+        "end_time": end_time,
+        "midpoint": (start_time + end_time) / 2.0,
+        "descriptor": f"{source_name}@{start_time:.2f}-{end_time:.2f}",
+    }
+
+
+def _audio_hits_to_descriptors(raw_hits: List[List[Dict[str, Any]]]) -> List[List[str]]:
+    descriptors: List[List[str]] = []
+    for hits in raw_hits:
+        rows: List[str] = []
+        for hit in hits:
+            window = _audio_hit_to_window(hit)
+            if window is not None:
+                rows.append(str(window["descriptor"]))
+        descriptors.append(rows)
+    return descriptors
+
+
 def _extract_doc_from_pdf_page(key: str) -> str:
     parts = str(key).rsplit("_", 1)
     if len(parts) != 2:
@@ -269,9 +360,40 @@ def hit_key_and_distance(hit: dict) -> tuple[str | None, float | None]:
     return key, dist
 
 
+def _is_audio_hit_at_k(query_row: pd.Series, hits: Sequence[Dict[str, Any]], k: int) -> bool:
+    expected_source = _normalize_source_name(query_row["expected_source"])
+    expected_start = float(query_row["start_time"])
+    expected_end = float(query_row["end_time"])
+    lower = expected_start - AUDIO_TIME_WINDOW_TOLERANCE_S
+    upper = expected_end + AUDIO_TIME_WINDOW_TOLERANCE_S
+
+    for hit in list(hits)[: int(k)]:
+        window = _audio_hit_to_window(hit)
+        if window is None:
+            continue
+        if window["source"] != expected_source:
+            continue
+        midpoint = float(window["midpoint"])
+        if midpoint > lower and midpoint < upper:
+            return True
+    return False
+
+
+def _audio_hit_rank(query_row: pd.Series, hits: Sequence[Dict[str, Any]], limit: int) -> int | None:
+    for idx, hit in enumerate(list(hits)[: int(limit)]):
+        if _is_audio_hit_at_k(query_row, [hit], 1):
+            return idx + 1
+    return None
+
+
 def _recall_at_k(gold: List[str], retrieved: List[List[str]], k: int, *, match_mode: str) -> float:
     hits = sum(is_hit_at_k(g, r, k, match_mode=match_mode) for g, r in zip(gold, retrieved))
     return hits / max(1, len(gold))
+
+
+def _audio_recall_at_k(df_query: pd.DataFrame, raw_hits: List[List[Dict[str, Any]]], k: int) -> float:
+    hits = sum(_is_audio_hit_at_k(row, hit_list, k) for (_, row), hit_list in zip(df_query.iterrows(), raw_hits))
+    return hits / max(1, len(df_query.index))
 
 
 def retrieve_and_score(
@@ -325,10 +447,14 @@ def retrieve_and_score(
         f"(average {len(queries)/end_queries:.2f} queries/second)",
     )
 
-    retrieved_keys = _hits_to_keys(raw_hits)
-    metrics = {
-        f"recall@{k}": _recall_at_k(gold, retrieved_keys, int(k), match_mode=str(cfg.match_mode)) for k in cfg.ks
-    }
+    if str(cfg.match_mode) == "audio_time_window":
+        retrieved_keys = _audio_hits_to_descriptors(raw_hits)
+        metrics = {f"recall@{k}": _audio_recall_at_k(df_query, raw_hits, int(k)) for k in cfg.ks}
+    else:
+        retrieved_keys = _hits_to_keys(raw_hits)
+        metrics = {
+            f"recall@{k}": _recall_at_k(gold, retrieved_keys, int(k), match_mode=str(cfg.match_mode)) for k in cfg.ks
+        }
     return df_query, gold, raw_hits, retrieved_keys, metrics
 
 
@@ -351,14 +477,19 @@ def evaluate_recall(
         row = {"query_id": i, "query": q, "golden_answer": g, "top_retrieved": r[: cfg.top_k]}
         for k in cfg.ks:
             k = int(k)
-            row[f"hit@{k}"] = is_hit_at_k(g, r, k, match_mode=str(cfg.match_mode))
+            if str(cfg.match_mode) == "audio_time_window":
+                query_row = df_query.iloc[i]
+                row[f"hit@{k}"] = _is_audio_hit_at_k(query_row, raw_hits[i], k)
+                row[f"rank@{k}"] = _audio_hit_rank(query_row, raw_hits[i], cfg.top_k)
+            else:
+                row[f"hit@{k}"] = is_hit_at_k(g, r, k, match_mode=str(cfg.match_mode))
             if str(cfg.match_mode) == "pdf_only":
                 top_docs = [_extract_doc_from_pdf_page(key) for key in r[: cfg.top_k]]
                 try:
                     row[f"rank@{k}"] = top_docs.index(_normalize_pdf_name(str(g))) + 1
                 except ValueError:
                     row[f"rank@{k}"] = None
-            else:
+            elif str(cfg.match_mode) != "audio_time_window":
                 row[f"rank@{k}"] = (r[: cfg.top_k].index(g) + 1) if (g in r[: cfg.top_k]) else None
         rows.append(row)
     results_df = pd.DataFrame(rows)

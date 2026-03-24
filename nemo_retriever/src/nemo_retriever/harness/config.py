@@ -16,7 +16,8 @@ REPO_ROOT = NEMO_RETRIEVER_ROOT.parent
 DEFAULT_TEST_CONFIG_PATH = NEMO_RETRIEVER_ROOT / "harness" / "test_configs.yaml"
 DEFAULT_NIGHTLY_CONFIG_PATH = NEMO_RETRIEVER_ROOT / "harness" / "nightly_config.yaml"
 VALID_EVALUATION_MODES = {"recall", "beir"}
-VALID_RECALL_ADAPTERS = {"none", "page_plus_one", "financebench_json"}
+VALID_RECALL_ADAPTERS = {"none", "page_plus_one", "financebench_json", "audio_retrieval_gt"}
+VALID_RECALL_MATCH_MODES = {"pdf_page", "pdf_only", "audio_time_window"}
 VALID_BEIR_LOADERS = {"vidore_hf"}
 VALID_BEIR_DOC_ID_FIELDS = {"pdf_basename", "pdf_page", "source_id", "path"}
 VALID_EMBED_MODALITIES = {"text", "image", "text_image"}
@@ -61,6 +62,11 @@ class HarnessConfig:
     recall_match_mode: str = "pdf_page"
     recall_adapter: str = "none"
     evaluation_mode: str = "recall"
+    segment_audio: bool = False
+    audio_grpc_endpoint: str | None = None
+    audio_http_endpoint: str | None = None
+    audio_auth_token: str | None = None
+    audio_function_id: str | None = None
     beir_loader: str | None = None
     beir_dataset_name: str | None = None
     beir_split: str = "test"
@@ -112,12 +118,12 @@ class HarnessConfig:
         if self.evaluation_mode == "recall" and self.recall_required and not self.query_csv:
             errors.append("recall_required=true requires query_csv")
 
-        if self.input_type not in {"pdf", "txt", "html", "doc"}:
-            errors.append(f"input_type must be one of pdf/txt/html/doc, got '{self.input_type}'")
+        if self.input_type not in {"pdf", "txt", "html", "doc", "audio"}:
+            errors.append(f"input_type must be one of pdf/txt/html/doc/audio, got '{self.input_type}'")
 
         if self.evaluation_mode == "recall":
-            if self.recall_match_mode not in {"pdf_page", "pdf_only"}:
-                errors.append("recall_match_mode must be one of pdf_page/pdf_only")
+            if self.recall_match_mode not in VALID_RECALL_MATCH_MODES:
+                errors.append("recall_match_mode must be one of " + "/".join(sorted(VALID_RECALL_MATCH_MODES)))
 
             if self.recall_adapter not in VALID_RECALL_ADAPTERS:
                 errors.append(f"recall_adapter must be one of {sorted(VALID_RECALL_ADAPTERS)}")
@@ -252,6 +258,11 @@ def _apply_env_overrides(config_dict: dict[str, Any]) -> None:
         "HARNESS_RECALL_MATCH_MODE": ("recall_match_mode", str),
         "HARNESS_RECALL_ADAPTER": ("recall_adapter", str),
         "HARNESS_EVALUATION_MODE": ("evaluation_mode", str),
+        "HARNESS_SEGMENT_AUDIO": ("segment_audio", _parse_bool),
+        "HARNESS_AUDIO_GRPC_ENDPOINT": ("audio_grpc_endpoint", str),
+        "HARNESS_AUDIO_HTTP_ENDPOINT": ("audio_http_endpoint", str),
+        "HARNESS_AUDIO_AUTH_TOKEN": ("audio_auth_token", str),
+        "HARNESS_AUDIO_FUNCTION_ID": ("audio_function_id", str),
         "HARNESS_BEIR_LOADER": ("beir_loader", str),
         "HARNESS_BEIR_DATASET_NAME": ("beir_dataset_name", str),
         "HARNESS_BEIR_SPLIT": ("beir_split", str),

@@ -173,6 +173,29 @@ class TestBuildLancedbRow:
         assert meta["page_elements_v3_counts_by_label"] == {"text": 3, "figure": 2}
         assert meta["ocr_table_detections"] == 2
 
+    def test_audio_segment_metadata_preserved(self):
+        row = self._row(
+            path="/audio/clip_a.mp3",
+            page_number=0,
+            metadata={
+                "embedding": [0.1, 0.2],
+                "source_path": "/audio/clip_a.mp3",
+                "chunk_index": 3,
+                "segment_index": 1,
+                "segment_count": 2,
+                "segment_start": 4.5,
+                "segment_end": 7.25,
+            },
+        )
+        result = build_lancedb_row(row)
+        meta = json.loads(result["metadata"])
+        assert meta["source_path"] == "/audio/clip_a.mp3"
+        assert meta["chunk_index"] == 3
+        assert meta["segment_index"] == 1
+        assert meta["segment_count"] == 2
+        assert meta["segment_start"] == 4.5
+        assert meta["segment_end"] == 7.25
+
 
 class TestBuildLancedbRows:
     def test_filters_rows_without_embeddings(self):

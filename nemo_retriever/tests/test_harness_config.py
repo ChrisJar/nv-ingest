@@ -184,6 +184,44 @@ def test_load_harness_config_supports_recall_adapter_and_match_mode(tmp_path: Pa
     assert cfg.recall_match_mode == "pdf_page"
 
 
+def test_load_harness_config_supports_audio_recall_options(tmp_path: Path) -> None:
+    dataset_dir = tmp_path / "dataset"
+    dataset_dir.mkdir()
+    query_csv = tmp_path / "video_retrieval_eval_gt.csv"
+    query_csv.write_text(
+        "name,question,answer_modality,start_time,end_time\nclip_a,q,Audio only,1.0,2.0\n",
+        encoding="utf-8",
+    )
+    cfg_path = tmp_path / "test_configs.yaml"
+    cfg_path.write_text(
+        "\n".join(
+            [
+                "active:",
+                "  dataset: tiny",
+                "  preset: base",
+                "presets:",
+                "  base: {}",
+                "datasets:",
+                "  tiny:",
+                f"    path: {dataset_dir}",
+                f"    query_csv: {query_csv}",
+                "    input_type: audio",
+                "    recall_required: true",
+                "    recall_adapter: audio_retrieval_gt",
+                "    recall_match_mode: audio_time_window",
+                "    segment_audio: true",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    cfg = load_harness_config(config_file=str(cfg_path))
+    assert cfg.input_type == "audio"
+    assert cfg.recall_adapter == "audio_retrieval_gt"
+    assert cfg.recall_match_mode == "audio_time_window"
+    assert cfg.segment_audio is True
+
+
 def test_load_harness_config_supports_multimodal_embedding_options(tmp_path: Path) -> None:
     dataset_dir = tmp_path / "dataset"
     dataset_dir.mkdir()

@@ -43,6 +43,8 @@ class _FakeErrorRows:
 class _FakeIngestor:
     def __init__(self) -> None:
         self.extract_params = None
+        self.audio_chunk_params = None
+        self.audio_asr_params = None
         self.embed_params = None
         self.file_patterns = None
 
@@ -56,6 +58,11 @@ class _FakeIngestor:
 
     def extract_image_files(self, params):
         self.extract_params = params
+        return self
+
+    def extract_audio(self, params, asr_params):
+        self.audio_chunk_params = params
+        self.audio_asr_params = asr_params
         return self
 
     def extract_txt(self, params):
@@ -85,10 +92,20 @@ def test_resolve_input_file_patterns_recurses_for_directory_inputs(tmp_path) -> 
     pdf_patterns = resolve_input_patterns(dataset_dir, "pdf")
     txt_patterns = resolve_input_patterns(dataset_dir, "txt")
     doc_patterns = resolve_input_patterns(dataset_dir, "doc")
+    audio_patterns = resolve_input_patterns(dataset_dir, "audio")
 
     assert pdf_patterns == [str(dataset_dir / "**" / "*.pdf")]
     assert txt_patterns == [str(dataset_dir / "**" / "*.txt")]
     assert doc_patterns == [str(dataset_dir / "**" / "*.docx"), str(dataset_dir / "**" / "*.pptx")]
+    assert audio_patterns == [
+        str(dataset_dir / "**" / "*.mp3"),
+        str(dataset_dir / "**" / "*.wav"),
+        str(dataset_dir / "**" / "*.m4a"),
+        str(dataset_dir / "**" / "*.mp4"),
+        str(dataset_dir / "**" / "*.mov"),
+        str(dataset_dir / "**" / "*.avi"),
+        str(dataset_dir / "**" / "*.mkv"),
+    ]
 
 
 def test_batch_pipeline_accepts_multimodal_embed_and_page_image_flags(tmp_path, monkeypatch) -> None:
@@ -180,3 +197,36 @@ def test_batch_pipeline_routes_beir_mode_to_evaluator(tmp_path, monkeypatch) -> 
     assert captured["cfg"].loader == "vidore_hf"
     assert captured["cfg"].dataset_name == "vidore_v3_computer_science"
     assert tuple(captured["cfg"].ks) == (5, 10)
+
+
+def test_batch_pipeline_routes_audio_inputs_to_extract_audio(tmp_path, monkeypatch) -> None:
+    dataset_dir = tmp_path / "dataset"
+    dataset_dir.mkdir()
+    (dataset_dir / "sample.mp3").write_text("placeholder", encoding="utf-8")
+    missing_query_csv = tmp_path / "missing.csv"
+
+    fake_ingestor = _FakeIngestor()
+    monkeypatch.setattr(batch_pipeline, "create_ingestor", lambda *args, **kwargs: fake_ingestor)
+    monkeypatch.setattr(batch_pipeline, "_ensure_lancedb_table", lambda *args, **kwargs: None)
+    monkeypatch.setattr(batch_pipeline, "handle_lancedb", lambda *args, **kwargs: None)
+
+    result = RUNNER.invoke(
+        batch_pipeline.app,
+        [
+            str(dataset_dir),
+            "--input-type",
+            "audio",
+            "--query-csv",
+            str(missing_query_csv),
+            "--segment-audio",
+            "--audio-grpc-endpoint",
+            "localhost:50051",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert fake_ingestor.file_patterns == [str(dataset_dir / "*.mp3")]
+    assert fake_ingestor.audio_chunk_params is not None
+    assert fake_ingestor.audio_asr_params is not None
+    assert fake_ingestor.audio_asr_params.segment_audio is True
+    assert fake_ingestor.audio_asr_params.audio_endpoints[0] == "localhost:50051"

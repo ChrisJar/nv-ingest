@@ -7,6 +7,7 @@ INPUT_TYPE_PATTERNS: dict[str, tuple[str, ...]] = {
     "txt": ("*.txt",),
     "html": ("*.html",),
     "doc": ("*.docx", "*.pptx"),
+    "audio": ("*.mp3", "*.wav", "*.m4a", "*.mp4", "*.mov", "*.avi", "*.mkv"),
 }
 
 

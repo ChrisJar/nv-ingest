@@ -282,6 +282,16 @@ def _build_command(cfg: HarnessConfig, artifact_dir: Path, run_id: str) -> tuple
             cfg.recall_match_mode,
             "--no-recall-details",
         ]
+    if cfg.input_type == "audio":
+        cmd += ["--segment-audio" if cfg.segment_audio else "--no-segment-audio"]
+        if cfg.audio_grpc_endpoint:
+            cmd += ["--audio-grpc-endpoint", cfg.audio_grpc_endpoint]
+        if cfg.audio_http_endpoint:
+            cmd += ["--audio-http-endpoint", cfg.audio_http_endpoint]
+        if cfg.audio_auth_token:
+            cmd += ["--audio-auth-token", cfg.audio_auth_token]
+        if cfg.audio_function_id:
+            cmd += ["--audio-function-id", cfg.audio_function_id]
 
     cmd += ["--extract-page-as-image" if cfg.extract_page_as_image else "--no-extract-page-as-image"]
     if cfg.extract_infographics:
@@ -446,6 +456,10 @@ def _run_single(cfg: HarnessConfig, artifact_dir: Path, run_id: str, tags: list[
             "recall_match_mode": cfg.recall_match_mode,
             "recall_adapter": cfg.recall_adapter,
             "evaluation_mode": cfg.evaluation_mode,
+            "segment_audio": cfg.segment_audio,
+            "audio_grpc_endpoint": cfg.audio_grpc_endpoint,
+            "audio_http_endpoint": cfg.audio_http_endpoint,
+            "audio_function_id": cfg.audio_function_id,
             "beir_loader": cfg.beir_loader,
             "beir_dataset_name": cfg.beir_dataset_name,
             "beir_split": cfg.beir_split,

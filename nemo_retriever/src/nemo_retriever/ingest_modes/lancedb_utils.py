@@ -128,10 +128,19 @@ def build_lancedb_row(
         metadata_obj["pdf_page"] = pdf_page
     metadata_obj.update(_build_detection_metadata(row))
 
-    # Preserve split metadata (chunk_index, chunk_count) from the original row.
+    # Preserve split/audio metadata from the original row so downstream recall
+    # evaluators can reason about chunk and segment timing after LanceDB upload.
     orig_meta = getattr(row, "metadata", None)
     if isinstance(orig_meta, dict):
-        for k in ("chunk_index", "chunk_count"):
+        for k in (
+            "chunk_index",
+            "chunk_count",
+            "source_path",
+            "segment_index",
+            "segment_count",
+            "segment_start",
+            "segment_end",
+        ):
             if k in orig_meta:
                 metadata_obj[k] = orig_meta[k]
 

@@ -111,6 +111,15 @@ datasets:
     recall_match_mode: pdf_only
     recall_adapter: financebench_json
 
+  audio_retrieval:
+    path: /raid/cjarrett/nv-ingest/data/audio_retrieval_data_mp3
+    query_csv: video_retrieval_eval_gt.csv
+    input_type: audio
+    recall_required: true
+    recall_match_mode: audio_time_window
+    recall_adapter: audio_retrieval_gt
+    segment_audio: true
+
   vidore_v3_computer_science:
     path: /datasets/nv-ingest/vidore_v3_corpus_pdf/vidore_v3_computer_science
     query_csv: null

@@ -16,6 +16,7 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any, Optional, TextIO
 
+from nemo_retriever.audio.asr_actor import asr_params_from_env
 from nemo_retriever.utils.detection_summary import print_run_summary
 import ray
 import typer
@@ -23,6 +24,8 @@ from nemo_retriever import create_ingestor
 from nemo_retriever.ingest_modes.batch import BatchIngestor
 from nemo_retriever.ingest_modes.lancedb_utils import lancedb_schema
 from nemo_retriever.model import resolve_embed_model
+from nemo_retriever.params import ASRParams
+from nemo_retriever.params import AudioChunkParams
 from nemo_retriever.params import EmbedParams
 from nemo_retriever.params import ExtractParams
 from nemo_retriever.params import IngestExecuteParams
@@ -198,7 +201,7 @@ def main(
     ),
     input_path: Path = typer.Argument(
         ...,
-        help="File or directory containing PDFs, .txt, .html, or .doc/.pptx files to ingest.",
+        help="File or directory containing PDFs, text/HTML/docs, or audio/video files to ingest.",
         path_type=Path,
     ),
     detection_summary_file: Optional[Path] = typer.Option(
@@ -211,7 +214,7 @@ def main(
     recall_match_mode: str = typer.Option(
         "pdf_page",
         "--recall-match-mode",
-        help="Recall match mode: 'pdf_page' or 'pdf_only'.",
+        help="Recall match mode: 'pdf_page', 'pdf_only', or 'audio_time_window'.",
     ),
     evaluation_mode: str = typer.Option(
         "recall",
@@ -315,7 +318,7 @@ def main(
     input_type: str = typer.Option(
         "pdf",
         "--input-type",
-        help="Input format: 'pdf', 'txt', 'html', 'doc', or 'image'. Use 'txt' for .txt, 'html' for .html (markitdown -> chunks), 'doc' for .docx/.pptx (converted to PDF via LibreOffice), 'image' for standalone image files (PNG, JPEG, BMP, TIFF, SVG).",  # noqa: E501
+        help="Input format: 'pdf', 'txt', 'html', 'doc', 'image', or 'audio'. Use 'txt' for .txt, 'html' for .html (markitdown -> chunks), 'doc' for .docx/.pptx (converted to PDF via LibreOffice), 'image' for standalone image files (PNG, JPEG, BMP, TIFF, SVG), and 'audio' for media files handled by extract_audio().",  # noqa: E501
     ),
     lancedb_uri: str = typer.Option(
         LANCEDB_URI,
@@ -326,6 +329,31 @@ def main(
         "pdfium",
         "--method",
         help="PDF text extraction method: 'pdfium' (native only), 'pdfium_hybrid' (native + OCR for scanned), 'ocr' (OCR all pages), or 'nemotron_parse' (Nemotron Parse only, auto-configured).",  # noqa: E501
+    ),
+    segment_audio: bool = typer.Option(
+        False,
+        "--segment-audio/--no-segment-audio",
+        help="For audio inputs, emit punctuation-delimited ASR segments with timing metadata when supported by remote Parakeet.",  # noqa: E501
+    ),
+    audio_grpc_endpoint: Optional[str] = typer.Option(
+        None,
+        "--audio-grpc-endpoint",
+        help="Optional Parakeet/Riva gRPC endpoint for audio ASR. Falls back to AUDIO_GRPC_ENDPOINT/NGC settings or local ASR.",  # noqa: E501
+    ),
+    audio_http_endpoint: Optional[str] = typer.Option(
+        None,
+        "--audio-http-endpoint",
+        help="Optional HTTP endpoint paired with audio ASR configuration.",
+    ),
+    audio_auth_token: Optional[str] = typer.Option(
+        None,
+        "--audio-auth-token",
+        help="Optional auth token override for remote audio ASR.",
+    ),
+    audio_function_id: Optional[str] = typer.Option(
+        None,
+        "--audio-function-id",
+        help="Optional NVCF function ID override for remote audio ASR.",
     ),
     log_file: Optional[Path] = typer.Option(
         None,
@@ -542,7 +570,7 @@ def main(
 ) -> None:
     log_handle, original_stdout, original_stderr = _configure_logging(log_file, debug=bool(debug))
     try:
-        if recall_match_mode not in {"pdf_page", "pdf_only"}:
+        if recall_match_mode not in {"pdf_page", "pdf_only", "audio_time_window"}:
             raise ValueError(f"Unsupported --recall-match-mode: {recall_match_mode}")
         if evaluation_mode not in {"recall", "beir"}:
             raise ValueError(f"Unsupported --evaluation-mode: {evaluation_mode}")
@@ -631,6 +659,7 @@ def main(
                 "html": ["*.html"],
                 "doc": ["*.docx", "*.pptx"],
                 "image": ["*.png", "*.jpg", "*.jpeg", "*.bmp", "*.tiff", "*.tif", "*.svg"],
+                "audio": ["*.mp3", "*.wav", "*.m4a", "*.mp4", "*.mov", "*.avi", "*.mkv"],
             }
             # If a specific image extension was requested, use only that extension's globs.
             if _original_input_type in _image_ext_map:
@@ -730,10 +759,34 @@ def main(
             overlap_tokens=text_chunk_overlap_tokens if text_chunk_overlap_tokens is not None else 150,
         )
 
+        def _audio_asr_params() -> ASRParams:
+            asr_params = asr_params_from_env()
+            updates: dict[str, Any] = {"segment_audio": bool(segment_audio)}
+            if audio_grpc_endpoint is not None or audio_http_endpoint is not None:
+                updates["audio_endpoints"] = (
+                    audio_grpc_endpoint if audio_grpc_endpoint is not None else asr_params.audio_endpoints[0],
+                    audio_http_endpoint if audio_http_endpoint is not None else asr_params.audio_endpoints[1],
+                )
+            if audio_auth_token is not None:
+                updates["auth_token"] = audio_auth_token
+            if audio_function_id is not None:
+                updates["function_id"] = audio_function_id
+            resolved = asr_params.model_copy(update=updates)
+            if resolved.segment_audio and not (resolved.audio_endpoints[0] or resolved.audio_endpoints[1]):
+                logger.warning(
+                    "segment_audio was requested without a remote ASR endpoint; local ASR will not emit timed segments."
+                )
+            return resolved
+
         if input_type == "txt":
             ingestor = ingestor.files(file_patterns).extract_txt(_text_chunk_params)
         elif input_type == "html":
             ingestor = ingestor.files(file_patterns).extract_html(_text_chunk_params)
+        elif input_type == "audio":
+            ingestor = ingestor.files(file_patterns).extract_audio(
+                params=AudioChunkParams(),
+                asr_params=_audio_asr_params(),
+            )
         elif input_type == "image":
             ingestor = ingestor.files(file_patterns).extract_image_files(_extract_params(_detection_batch_tuning))
         elif input_type == "doc":
