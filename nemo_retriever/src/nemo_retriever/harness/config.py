@@ -18,6 +18,7 @@ DEFAULT_NIGHTLY_CONFIG_PATH = NEMO_RETRIEVER_ROOT / "harness" / "nightly_config.
 VALID_EVALUATION_MODES = {"recall", "beir"}
 VALID_RECALL_ADAPTERS = {"none", "page_plus_one", "financebench_json", "audio_retrieval_gt"}
 VALID_RECALL_MATCH_MODES = {"pdf_page", "pdf_only", "audio_time_window"}
+VALID_AUDIO_SPLIT_TYPES = {"size", "time", "frame"}
 VALID_BEIR_LOADERS = {"vidore_hf"}
 VALID_BEIR_DOC_ID_FIELDS = {"pdf_basename", "pdf_page", "source_id", "path"}
 VALID_EMBED_MODALITIES = {"text", "image", "text_image"}
@@ -63,6 +64,8 @@ class HarnessConfig:
     recall_adapter: str = "none"
     evaluation_mode: str = "recall"
     segment_audio: bool = False
+    split_type: str = "size"
+    split_interval: int = 450
     audio_grpc_endpoint: str | None = None
     audio_http_endpoint: str | None = None
     audio_auth_token: str | None = None
@@ -120,6 +123,14 @@ class HarnessConfig:
 
         if self.input_type not in {"pdf", "txt", "html", "doc", "audio"}:
             errors.append(f"input_type must be one of pdf/txt/html/doc/audio, got '{self.input_type}'")
+
+        if self.split_type not in VALID_AUDIO_SPLIT_TYPES:
+            errors.append(f"split_type must be one of {sorted(VALID_AUDIO_SPLIT_TYPES)}")
+        try:
+            if int(self.split_interval) < 1:
+                errors.append("split_interval must be >= 1")
+        except (TypeError, ValueError):
+            errors.append("split_interval must be an integer >= 1")
 
         if self.evaluation_mode == "recall":
             if self.recall_match_mode not in VALID_RECALL_MATCH_MODES:
@@ -259,6 +270,8 @@ def _apply_env_overrides(config_dict: dict[str, Any]) -> None:
         "HARNESS_RECALL_ADAPTER": ("recall_adapter", str),
         "HARNESS_EVALUATION_MODE": ("evaluation_mode", str),
         "HARNESS_SEGMENT_AUDIO": ("segment_audio", _parse_bool),
+        "HARNESS_AUDIO_SPLIT_TYPE": ("split_type", str),
+        "HARNESS_AUDIO_SPLIT_INTERVAL": ("split_interval", _parse_number),
         "HARNESS_AUDIO_GRPC_ENDPOINT": ("audio_grpc_endpoint", str),
         "HARNESS_AUDIO_HTTP_ENDPOINT": ("audio_http_endpoint", str),
         "HARNESS_AUDIO_AUTH_TOKEN": ("audio_auth_token", str),

@@ -72,6 +72,7 @@ def test_asr_actor_mock_transcribe():
                     "path": "/tmp/chunk.wav",
                     "bytes": raw,
                     "source_path": "/tmp/source.wav",
+                    "source_id": "/tmp/source.wav_0",
                     "duration": 1.0,
                     "chunk_index": 0,
                     "metadata": {"source_path": "/tmp/source.wav", "chunk_index": 0, "duration": 1.0},
@@ -85,6 +86,7 @@ def test_asr_actor_mock_transcribe():
         assert out["text"].iloc[0] == "hello world transcript"
         assert out["path"].iloc[0] == "/tmp/chunk.wav"
         assert out["source_path"].iloc[0] == "/tmp/source.wav"
+        assert out["source_id"].iloc[0] == "/tmp/source.wav_0"
         mock_client.infer.assert_called_once()
         call_arg = mock_client.infer.call_args[0][0]
         assert call_arg == base64.b64encode(raw).decode("ascii")
@@ -102,6 +104,7 @@ def test_apply_asr_to_df():
                     "path": "/p",
                     "bytes": b"x",
                     "source_path": "/s",
+                    "source_id": "/s_0",
                     "duration": 0.5,
                     "chunk_index": 0,
                     "metadata": {},
@@ -113,6 +116,7 @@ def test_apply_asr_to_df():
         assert isinstance(out, pd.DataFrame)
         assert len(out) == 1
         assert out["text"].iloc[0] == "applied transcript"
+        assert out["source_id"].iloc[0] == "/s_0"
 
 
 def test_asr_actor_remote_segment_audio():
@@ -135,6 +139,7 @@ def test_asr_actor_remote_segment_audio():
                     "path": "/tmp/chunk.wav",
                     "bytes": b"fake_audio",
                     "source_path": "/tmp/source.wav",
+                    "source_id": "/tmp/source.wav_3",
                     "duration": 2.5,
                     "chunk_index": 3,
                     "metadata": {"source_path": "/tmp/source.wav", "chunk_index": 3, "duration": 2.5},
@@ -148,6 +153,7 @@ def test_asr_actor_remote_segment_audio():
         assert out["text"].tolist() == ["Hello world.", "How are you?"]
         assert out["page_number"].tolist() == [3, 3]
         assert out["chunk_index"].tolist() == [3, 3]
+        assert out["source_id"].tolist() == ["/tmp/source.wav_3", "/tmp/source.wav_3"]
         assert out["metadata"].iloc[0]["segment_index"] == 0
         assert out["metadata"].iloc[0]["segment_count"] == 2
         assert out["metadata"].iloc[0]["segment_start"] == 0.0
@@ -175,6 +181,7 @@ def test_apply_asr_to_df_segment_audio():
                     "path": "/p",
                     "bytes": b"x",
                     "source_path": "/s",
+                    "source_id": "/s_0",
                     "duration": 0.8,
                     "chunk_index": 0,
                     "metadata": {},
@@ -189,6 +196,7 @@ def test_apply_asr_to_df_segment_audio():
         assert isinstance(out, pd.DataFrame)
         assert len(out) == 2
         assert out["text"].tolist() == ["First sentence.", "Second sentence!"]
+        assert out["source_id"].tolist() == ["/s_0", "/s_0"]
         assert out["metadata"].iloc[0]["segment_count"] == 2
 
 
@@ -216,6 +224,7 @@ def test_local_asr_does_not_call_get_client():
                         "path": "/tmp/chunk.wav",
                         "bytes": b"fake_audio_bytes",
                         "source_path": "/tmp/source.wav",
+                        "source_id": "/tmp/source.wav_0",
                         "duration": 1.0,
                         "chunk_index": 0,
                         "metadata": {},
@@ -227,6 +236,7 @@ def test_local_asr_does_not_call_get_client():
 
             assert len(out) == 1
             assert out["text"].iloc[0] == "mocked local transcript"
+            assert out["source_id"].iloc[0] == "/tmp/source.wav_0"
             mock_model.transcribe.assert_called_once()
             # One path passed (temp file or /tmp/chunk.wav)
             call_args = mock_model.transcribe.call_args[0][0]
@@ -256,6 +266,7 @@ def test_local_asr_apply_asr_to_df():
                         "path": "/p",
                         "bytes": b"x",
                         "source_path": "/s",
+                        "source_id": "/s_0",
                         "duration": 0.5,
                         "chunk_index": 0,
                         "metadata": {},
@@ -268,8 +279,37 @@ def test_local_asr_apply_asr_to_df():
             mock_get.assert_not_called()
             assert len(out) == 1
             assert out["text"].iloc[0] == "apply local text"
+            assert out["source_id"].iloc[0] == "/s_0"
     finally:
         if prev_local is None:
             sys.modules.pop("nemo_retriever.model.local", None)
         else:
             sys.modules["nemo_retriever.model.local"] = prev_local
+
+
+def test_asr_actor_builds_source_id_when_missing():
+    with patch("nemo_retriever.audio.asr_actor._get_client") as mock_get:
+        mock_client = MagicMock()
+        mock_client.infer.return_value = ([], "fallback transcript")
+        mock_get.return_value = mock_client
+
+        params = ASRParams(audio_endpoints=("localhost:50051", None))
+        actor = ASRActor(params=params)
+        batch = pd.DataFrame(
+            [
+                {
+                    "path": "/tmp/chunk.wav",
+                    "bytes": b"raw",
+                    "source_path": "/tmp/source.wav",
+                    "duration": 1.0,
+                    "chunk_index": 2,
+                    "metadata": {},
+                    "page_number": 2,
+                }
+            ]
+        )
+
+        out = actor(batch)
+
+        assert len(out) == 1
+        assert out["source_id"].iloc[0] == "/tmp/source.wav_2"

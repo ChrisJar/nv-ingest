@@ -46,9 +46,10 @@ def test_audio_chunk_then_mock_asr_flow(tmp_path: Path):
     rows = _chunk_one(str(wav), params, interface)
     assert len(rows) >= 1
     row = rows[0]
-    assert "path" in row and "source_path" in row and "duration" in row
+    assert "path" in row and "source_path" in row and "source_id" in row and "duration" in row
     assert "chunk_index" in row and "bytes" in row
     assert row["source_path"] == str(wav.resolve())
+    assert row["source_id"] == f"{str(wav.resolve())}_0"
 
 
 @pytest.mark.skipif(not is_media_available(), reason="ffmpeg not available")

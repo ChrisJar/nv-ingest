@@ -209,6 +209,8 @@ def test_build_command_supports_audio_recall_options(tmp_path: Path) -> None:
         recall_match_mode="audio_time_window",
         recall_adapter="audio_retrieval_gt",
         segment_audio=True,
+        split_type="time",
+        split_interval=30,
         audio_grpc_endpoint="localhost:50051",
         audio_function_id="fn-123",
     )
@@ -221,6 +223,10 @@ def test_build_command_supports_audio_recall_options(tmp_path: Path) -> None:
     assert "--recall-match-mode" in cmd
     assert cmd[cmd.index("--recall-match-mode") + 1] == "audio_time_window"
     assert "--segment-audio" in cmd
+    assert "--split-type" in cmd
+    assert cmd[cmd.index("--split-type") + 1] == "time"
+    assert "--split-interval" in cmd
+    assert cmd[cmd.index("--split-interval") + 1] == "30"
     assert "--audio-grpc-endpoint" in cmd
     assert cmd[cmd.index("--audio-grpc-endpoint") + 1] == "localhost:50051"
     assert "--audio-function-id" in cmd
@@ -543,6 +549,8 @@ def test_run_single_writes_results_with_run_metadata(monkeypatch, tmp_path: Path
             "recall_adapter": cfg.recall_adapter,
             "evaluation_mode": cfg.evaluation_mode,
             "segment_audio": cfg.segment_audio,
+            "split_type": cfg.split_type,
+            "split_interval": cfg.split_interval,
             "audio_grpc_endpoint": cfg.audio_grpc_endpoint,
             "audio_http_endpoint": cfg.audio_http_endpoint,
             "audio_function_id": cfg.audio_function_id,

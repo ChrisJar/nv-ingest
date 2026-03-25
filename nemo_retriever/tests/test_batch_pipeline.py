@@ -219,6 +219,10 @@ def test_batch_pipeline_routes_audio_inputs_to_extract_audio(tmp_path, monkeypat
             "--query-csv",
             str(missing_query_csv),
             "--segment-audio",
+            "--split-type",
+            "time",
+            "--split-interval",
+            "30",
             "--audio-grpc-endpoint",
             "localhost:50051",
         ],
@@ -228,5 +232,7 @@ def test_batch_pipeline_routes_audio_inputs_to_extract_audio(tmp_path, monkeypat
     assert fake_ingestor.file_patterns == [str(dataset_dir / "*.mp3")]
     assert fake_ingestor.audio_chunk_params is not None
     assert fake_ingestor.audio_asr_params is not None
+    assert fake_ingestor.audio_chunk_params.split_type == "time"
+    assert fake_ingestor.audio_chunk_params.split_interval == 30
     assert fake_ingestor.audio_asr_params.segment_audio is True
     assert fake_ingestor.audio_asr_params.audio_endpoints[0] == "localhost:50051"

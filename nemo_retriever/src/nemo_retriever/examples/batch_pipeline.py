@@ -184,7 +184,6 @@ def _hit_key_and_distance(hit: dict) -> tuple[str | None, float | None]:
     dist = float(hit["_distance"]) if "_distance" in hit else float(hit["_score"]) if "_score" in hit else None
     return key, dist
 
-
 @app.command()
 def main(
     ctx: typer.Context,
@@ -334,6 +333,17 @@ def main(
         False,
         "--segment-audio/--no-segment-audio",
         help="For audio inputs, emit punctuation-delimited ASR segments with timing metadata when supported by remote Parakeet.",  # noqa: E501
+    ),
+    split_type: str = typer.Option(
+        "size",
+        "--split-type",
+        help="For audio inputs, chunk by size, time, or frame.",
+    ),
+    split_interval: int = typer.Option(
+        450,
+        "--split-interval",
+        min=1,
+        help="For audio inputs, chunk interval in bytes, seconds, or frames depending on split type.",
     ),
     audio_grpc_endpoint: Optional[str] = typer.Option(
         None,
@@ -784,7 +794,7 @@ def main(
             ingestor = ingestor.files(file_patterns).extract_html(_text_chunk_params)
         elif input_type == "audio":
             ingestor = ingestor.files(file_patterns).extract_audio(
-                params=AudioChunkParams(),
+                params=AudioChunkParams(split_type=split_type, split_interval=split_interval),
                 asr_params=_audio_asr_params(),
             )
         elif input_type == "image":

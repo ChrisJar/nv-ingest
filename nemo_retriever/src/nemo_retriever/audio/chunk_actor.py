@@ -6,7 +6,7 @@
 MediaChunkActor: Ray Data map_batches callable for audio/video chunking.
 
 Consumes rows from rd.read_binary_files (path, bytes) and produces one row
-per chunk with path, source_path, duration, chunk_index, metadata.
+per chunk with path, source_path, source_id, duration, chunk_index, metadata.
 """
 
 from __future__ import annotations
@@ -25,15 +25,16 @@ from nemo_retriever.params import AudioChunkParams
 logger = logging.getLogger(__name__)
 
 # Output columns for downstream (ASR, embed, VDB). bytes optional for in-memory pipeline.
-CHUNK_COLUMNS = ["path", "source_path", "duration", "chunk_index", "metadata", "page_number", "bytes"]
+CHUNK_COLUMNS = ["path", "source_path", "source_id", "duration", "chunk_index", "metadata", "page_number", "bytes"]
 
 
 class MediaChunkActor:
     """
     Ray Data map_batches callable: DataFrame with path, bytes -> DataFrame of chunk rows.
 
-    Each output row has: path (chunk file), source_path, duration, chunk_index,
-    metadata (dict with source_path, chunk_index, duration), page_number (= chunk_index).
+    Each output row has: path (chunk file), source_path, source_id, duration,
+    chunk_index, metadata (dict with source_path, chunk_index, duration),
+    page_number (= chunk_index).
     """
 
     def __init__(self, params: AudioChunkParams | None = None) -> None:
@@ -106,6 +107,7 @@ def _chunk_one(source_path: str, params: AudioChunkParams, interface: MediaInter
                 {
                     "path": chunk_path,
                     "source_path": source_path,
+                    "source_id": f"{source_path}_{idx}",
                     "duration": duration,
                     "chunk_index": idx,
                     "metadata": meta,
@@ -118,8 +120,9 @@ def _chunk_one(source_path: str, params: AudioChunkParams, interface: MediaInter
 
 def audio_path_to_chunks_df(path: str, params: AudioChunkParams | None = None) -> pd.DataFrame:
     """
-    Synchronous loader: one media file path -> DataFrame of chunk rows (path, source_path, duration, chunk_index,
-    metadata, page_number, bytes).
+    Synchronous loader: one media file path -> DataFrame of chunk rows
+    (path, source_path, source_id, duration, chunk_index, metadata,
+    page_number, bytes).
 
     Used by inprocess ingest() when _pipeline_type == "audio".
     """

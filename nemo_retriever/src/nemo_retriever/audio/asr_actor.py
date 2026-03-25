@@ -8,7 +8,7 @@ ASRActor: Ray Data map_batches callable for speech-to-text.
 Supports remote (Parakeet/Riva gRPC) or local (HuggingFace nvidia/parakeet-ctc-1.1b).
 When audio_endpoints are both null/empty, uses local model; otherwise uses remote client.
 
-Consumes chunk rows (path, bytes, source_path, duration, chunk_index, metadata)
+Consumes chunk rows (path, bytes, source_path, source_id, duration, chunk_index, metadata)
 and produces rows with text (transcript) for downstream embed/VDB. For now,
 ``segment_audio=True`` only fans out rows when using a hosted/remote Parakeet
 client, because the local Hugging Face Parakeet model does not emit
@@ -145,7 +145,7 @@ class ASRActor:
     def __call__(self, batch_df: pd.DataFrame) -> pd.DataFrame:
         if not isinstance(batch_df, pd.DataFrame) or batch_df.empty:
             return pd.DataFrame(
-                columns=["path", "source_path", "duration", "chunk_index", "metadata", "page_number", "text"]
+                columns=["path", "source_path", "source_id", "duration", "chunk_index", "metadata", "page_number", "text"]
             )
 
         if self._client is not None:
@@ -164,7 +164,7 @@ class ASRActor:
 
         if not out_rows:
             return pd.DataFrame(
-                columns=["path", "source_path", "duration", "chunk_index", "metadata", "page_number", "text"]
+                columns=["path", "source_path", "source_id", "duration", "chunk_index", "metadata", "page_number", "text"]
             )
         return pd.DataFrame(out_rows)
 
@@ -172,7 +172,7 @@ class ASRActor:
         """Local ASR: one batched transcribe call for the whole batch."""
         if self._model is None:
             return pd.DataFrame(
-                columns=["path", "source_path", "duration", "chunk_index", "metadata", "page_number", "text"]
+                columns=["path", "source_path", "source_id", "duration", "chunk_index", "metadata", "page_number", "text"]
             )
         temp_paths: List[Optional[str]] = []
         paths_for_model: List[str] = []
@@ -231,7 +231,7 @@ class ASRActor:
 
         if not out_rows:
             return pd.DataFrame(
-                columns=["path", "source_path", "duration", "chunk_index", "metadata", "page_number", "text"]
+                columns=["path", "source_path", "source_id", "duration", "chunk_index", "metadata", "page_number", "text"]
             )
         return pd.DataFrame(out_rows)
 
@@ -279,6 +279,7 @@ class ASRActor:
         """Build one or more output rows for a chunk, optionally exploding remote punctuation segments."""
         path = row.get("path")
         source_path = row.get("source_path", path)
+        source_id = row.get("source_id") or f"{source_path}_{row.get('chunk_index', 0)}"
         duration = row.get("duration")
         chunk_index = row.get("chunk_index", 0)
         metadata = row.get("metadata")
@@ -311,6 +312,7 @@ class ASRActor:
                     {
                         "path": path,
                         "source_path": source_path,
+                        "source_id": source_id,
                         "duration": duration,
                         "chunk_index": chunk_index,
                         "metadata": segment_metadata,
@@ -325,6 +327,7 @@ class ASRActor:
             {
                 "path": path,
                 "source_path": source_path,
+                "source_id": source_id,
                 "duration": duration,
                 "chunk_index": chunk_index,
                 "metadata": metadata,

@@ -210,6 +210,8 @@ def test_load_harness_config_supports_audio_recall_options(tmp_path: Path) -> No
                 "    recall_adapter: audio_retrieval_gt",
                 "    recall_match_mode: audio_time_window",
                 "    segment_audio: true",
+                "    split_type: time",
+                "    split_interval: 30",
             ]
         ),
         encoding="utf-8",
@@ -220,6 +222,8 @@ def test_load_harness_config_supports_audio_recall_options(tmp_path: Path) -> No
     assert cfg.recall_adapter == "audio_retrieval_gt"
     assert cfg.recall_match_mode == "audio_time_window"
     assert cfg.segment_audio is True
+    assert cfg.split_type == "time"
+    assert cfg.split_interval == 30
 
 
 def test_load_harness_config_supports_multimodal_embedding_options(tmp_path: Path) -> None:

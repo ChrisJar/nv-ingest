@@ -284,6 +284,8 @@ def _build_command(cfg: HarnessConfig, artifact_dir: Path, run_id: str) -> tuple
         ]
     if cfg.input_type == "audio":
         cmd += ["--segment-audio" if cfg.segment_audio else "--no-segment-audio"]
+        cmd += ["--split-type", cfg.split_type]
+        cmd += ["--split-interval", str(int(cfg.split_interval))]
         if cfg.audio_grpc_endpoint:
             cmd += ["--audio-grpc-endpoint", cfg.audio_grpc_endpoint]
         if cfg.audio_http_endpoint:
@@ -457,6 +459,8 @@ def _run_single(cfg: HarnessConfig, artifact_dir: Path, run_id: str, tags: list[
             "recall_adapter": cfg.recall_adapter,
             "evaluation_mode": cfg.evaluation_mode,
             "segment_audio": cfg.segment_audio,
+            "split_type": cfg.split_type,
+            "split_interval": cfg.split_interval,
             "audio_grpc_endpoint": cfg.audio_grpc_endpoint,
             "audio_http_endpoint": cfg.audio_http_endpoint,
             "audio_function_id": cfg.audio_function_id,

@@ -192,6 +192,7 @@ class _BatchEmbedActor:
 
 class BatchIngestor(Ingestor):
     RUN_MODE = "batch"
+    _ERROR_FIELD_NAMES = ("error", "errors", "exception", "traceback", "failed")
 
     def __init__(
         self,
@@ -984,7 +985,7 @@ class BatchIngestor(Ingestor):
         return self.save_intermediate_results(output_dir=output_dir)
 
     @staticmethod
-    def _has_error(v: Any) -> bool:
+    def _has_error(v: Any, *, allow_keyword_strings: bool = True) -> bool:
         """Recursively detect whether a value contains error-like payloads."""
 
         def _is_populated_error_field(key: str, value: Any) -> bool:
@@ -1001,12 +1002,20 @@ class BatchIngestor(Ingestor):
         if v is None:
             return False
         if isinstance(v, dict):
-            for k in ("error", "errors", "exception", "traceback", "failed"):
+            for k in BatchIngestor._ERROR_FIELD_NAMES:
                 if k in v and _is_populated_error_field(k, v.get(k)):
                     return True
-            return any(BatchIngestor._has_error(x) for x in v.values())
+            return any(
+                BatchIngestor._has_error(x, allow_keyword_strings=False)
+                for x in v.values()
+                if isinstance(x, (dict, list, tuple, set, str))
+            )
         if isinstance(v, list):
-            return any(BatchIngestor._has_error(x) for x in v)
+            return any(
+                BatchIngestor._has_error(x, allow_keyword_strings=False)
+                for x in v
+                if isinstance(x, (dict, list, tuple, set, str))
+            )
         if isinstance(v, str):
             s = v.strip()
             if not s:
@@ -1014,11 +1023,13 @@ class BatchIngestor(Ingestor):
             # Parse JSON-like strings first, then fall back to keyword matching.
             if (s.startswith("{") and s.endswith("}")) or (s.startswith("[") and s.endswith("]")):
                 try:
-                    return BatchIngestor._has_error(json.loads(s))
+                    return BatchIngestor._has_error(json.loads(s), allow_keyword_strings=allow_keyword_strings)
                 except Exception:
                     pass
-            low = s.lower()
-            return any(tok in low for tok in ("error", "exception", "traceback", "failed"))
+            if allow_keyword_strings:
+                low = s.lower()
+                return any(tok in low for tok in ("error", "exception", "traceback", "failed"))
+            return False
         return False
 
     @staticmethod
@@ -1051,9 +1062,14 @@ class BatchIngestor(Ingestor):
         if not cols:
             return batch.iloc[0:0]
 
-        mask = batch[cols[0]].apply(BatchIngestor._has_error).astype(bool)
+        keyword_string_columns = {"error", "errors", "exception", "traceback"}
+
+        def _column_has_error(column_name: str, value: Any) -> bool:
+            return BatchIngestor._has_error(value, allow_keyword_strings=column_name in keyword_string_columns)
+
+        mask = batch[cols[0]].apply(lambda value: _column_has_error(cols[0], value)).astype(bool)
         for c in cols[1:]:
-            mask = mask | batch[c].apply(BatchIngestor._has_error).astype(bool)
+            mask = mask | batch[c].apply(lambda value: _column_has_error(c, value)).astype(bool)
         return batch[mask]
 
     def get_error_rows(self, dataset: rd.Dataset | None = None) -> rd.Dataset:

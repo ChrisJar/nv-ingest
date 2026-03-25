@@ -57,10 +57,11 @@ def test_media_chunk_actor_single_small_file(tmp_path: Path):
     out = actor(batch)
 
     assert isinstance(out, pd.DataFrame)
-    for col in ["path", "source_path", "duration", "chunk_index", "metadata", "page_number", "bytes"]:
+    for col in ["path", "source_path", "source_id", "duration", "chunk_index", "metadata", "page_number", "bytes"]:
         assert col in out.columns
     assert len(out) >= 1
     assert out["source_path"].iloc[0] == str(wav.resolve())
+    assert out["source_id"].iloc[0] == f"{str(wav.resolve())}_0"
     assert out["chunk_index"].iloc[0] == 0
     assert isinstance(out["bytes"].iloc[0], bytes)
 
@@ -73,9 +74,10 @@ def test_audio_path_to_chunks_df(tmp_path: Path):
     df = audio_path_to_chunks_df(str(wav), params=params)
     assert isinstance(df, pd.DataFrame)
     assert len(df) >= 1
-    assert "path" in df.columns and "source_path" in df.columns
+    assert "path" in df.columns and "source_path" in df.columns and "source_id" in df.columns
     assert "bytes" in df.columns
     assert df["source_path"].iloc[0] == str(wav.resolve())
+    assert df["source_id"].iloc[0] == f"{str(wav.resolve())}_0"
 
 
 def test_media_chunk_actor_requires_ffmpeg():
