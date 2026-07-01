@@ -15,6 +15,7 @@ if command -v uv >/dev/null 2>&1; then
   fi
   uv pip install --python "${PYTHON_BIN}" --upgrade \
     accelerate \
+    librosa \
     numpy \
     torch \
     "git+https://github.com/huggingface/transformers.git"
@@ -25,6 +26,7 @@ else
   python -m pip install --upgrade pip
   python -m pip install --upgrade \
     accelerate \
+    librosa \
     numpy \
     torch \
     "git+https://github.com/huggingface/transformers.git"

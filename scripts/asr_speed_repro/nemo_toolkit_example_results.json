@@ -1,9 +1,0 @@
-{
-  "model": "nvidia/nemotron-speech-streaming-en-0.6b",
-  "audio_seconds": 1069.400816,
-  "load_seconds": 18.45260255294852,
-  "transcribe_seconds": 4.323574910173193,
-  "realtime_factor": 247.34180353478882,
-  "transcript_chars": 16778,
-  "transcript_preview": "Hello everyone, I'm Naveen Rao. I'm the VP of Generative AI here at Databricks, previously the founder and CEO of Mosaic ML. So what is DBRX? Well, we're going to talk about the mo"
-}
