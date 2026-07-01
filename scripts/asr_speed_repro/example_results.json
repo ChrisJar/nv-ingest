@@ -1,0 +1,20 @@
+[
+  {
+    "model": "nvidia/parakeet-ctc-1.1b",
+    "audio_seconds": 1069.35,
+    "load_seconds": 18.181131582008675,
+    "transcribe_seconds": 1.2562922718934715,
+    "realtime_factor": 851.1952384999439,
+    "transcript_chars": 16233,
+    "transcript_preview": "hello everyone i'm naveen rau i'm the vp of generative ai here at databricks previously the founder ceo of mosaic ml so what is dvrx well we're going to talk about the models weve "
+  },
+  {
+    "model": "nvidia/nemotron-speech-streaming-en-0.6b",
+    "audio_seconds": 1069.35,
+    "load_seconds": 2.1831058950629085,
+    "transcribe_seconds": 45.76817963900976,
+    "realtime_factor": 23.364486165592588,
+    "transcript_chars": 16787,
+    "transcript_preview": "Hello everyone, I'm Naveen Rao. I'm the VP of Generative AI here at Databricks, previously the founder and CEO of Mosaic ML. So what is DBRX? Well, we're going to talk about the mo"
+  }
+]
