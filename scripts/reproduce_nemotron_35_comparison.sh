@@ -8,14 +8,12 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 
 N3_1B_MODEL="nvidia/Nemotron-3-Embed-1B-NVFP4"
-N3_8B_MODEL="nvidia/Nemotron-3-Embed-8B-BF16"
 N35_1B_MODEL="${REPO_ROOT}/../model_checkpoints/nemotron-3.5-1b"
 N35_8B_MODEL="${REPO_ROOT}/../model_checkpoints/nemotron-3.5-8b"
 DATASET_PATHS=""
 OUTPUT_DIR="${REPO_ROOT}/artifacts/nemotron_35_reproduction"
 HARNESS_BIN="${REPO_ROOT}/retriever/bin/retriever-harness"
 DRY_RUN=false
-INCLUDE_MATCHED_8B=false
 
 usage() {
   cat <<'EOF'
@@ -31,10 +29,7 @@ Model options:
   --n3-1b MODEL              Deployed baseline model.
                               Default: nvidia/Nemotron-3-Embed-1B-NVFP4
   --n35-1b MODEL             Nemotron 3.5 1B checkpoint or Hub ID.
-  --n3-8b MODEL              Matched Nemotron 3 8B checkpoint or Hub ID.
-                              Default: nvidia/Nemotron-3-Embed-8B-BF16
   --n35-8b MODEL             Nemotron 3.5 8B checkpoint or Hub ID.
-  --include-matched-8b       Also run N3 8B text-only as an encoder-family control.
 
 Execution options:
   --output-dir DIR           Output root. Must not already contain an arm directory.
@@ -98,11 +93,6 @@ while (($#)); do
       N3_1B_MODEL="$2"
       shift 2
       ;;
-    --n3-8b)
-      (($# >= 2)) || die "--n3-8b requires a value"
-      N3_8B_MODEL="$2"
-      shift 2
-      ;;
     --n35-1b)
       (($# >= 2)) || die "--n35-1b requires a value"
       N35_1B_MODEL="$2"
@@ -122,10 +112,6 @@ while (($#)); do
       (($# >= 2)) || die "--harness-bin requires a value"
       HARNESS_BIN="$2"
       shift 2
-      ;;
-    --include-matched-8b)
-      INCLUDE_MATCHED_8B=true
-      shift
       ;;
     --dry-run)
       DRY_RUN=true
@@ -159,9 +145,6 @@ validate_local_model() {
 validate_local_model "${N3_1B_MODEL}"
 validate_local_model "${N35_1B_MODEL}"
 validate_local_model "${N35_8B_MODEL}"
-if [[ "${INCLUDE_MATCHED_8B}" == true ]]; then
-  validate_local_model "${N3_8B_MODEL}"
-fi
 
 mkdir -p "${OUTPUT_DIR}/config/runfiles"
 OUTPUT_DIR="$(cd -- "${OUTPUT_DIR}" && pwd)"
@@ -194,9 +177,7 @@ git_commit=$(git -C "${REPO_ROOT}" rev-parse HEAD 2>/dev/null || printf unknown)
 dataset_paths=${DATASET_PATHS}
 n3_1b=${N3_1B_MODEL}
 n35_1b=${N35_1B_MODEL}
-n3_8b=${N3_8B_MODEL}
 n35_8b=${N35_8B_MODEL}
-include_matched_8b=${INCLUDE_MATCHED_8B}
 dry_run=${DRY_RUN}
 EOF
 
@@ -328,12 +309,6 @@ run_bo n35_1b_bo767 "${N35_1B_MODEL}"
 run_vidore_text n35_8b_vidore_text "${N35_8B_MODEL}"
 run_vidore_text_image n35_8b_vidore_text_image "${N35_8B_MODEL}"
 run_bo n35_8b_bo767 "${N35_8B_MODEL}"
-
-# Optional architecture-matched 8B control for the frozen-text-encoder question.
-if [[ "${INCLUDE_MATCHED_8B}" == true ]]; then
-  run_vidore_text n3_8b_vidore_text "${N3_8B_MODEL}"
-  run_bo n3_8b_bo767 "${N3_8B_MODEL}"
-fi
 
 if [[ "${DRY_RUN}" == false ]]; then
   python3 - "${OUTPUT_DIR}" <<'PY'
