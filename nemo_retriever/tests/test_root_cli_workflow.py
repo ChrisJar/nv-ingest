@@ -1272,8 +1272,10 @@ def test_root_ingest_default_local_rejects_batch_only_options(tmp_path) -> None:
     assert "--ray-address" in result.output
 
 
-def test_root_ingest_service_help_hides_local_only_options() -> None:
-    result = RUNNER.invoke(cli_main.app, ["ingest", "service", "--help"], env={"COLUMNS": "200"})
+def test_root_ingest_service_help_hides_local_only_options(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(typer_rich_utils, "MAX_WIDTH", 200)
+    monkeypatch.setattr(typer_rich_utils, "FORCE_TERMINAL", False)
+    result = RUNNER.invoke(cli_main.app, ["ingest", "service", "--help"])
 
     assert result.exit_code == 0
     assert "Usage: root ingest service [OPTIONS] {documents}..." in result.output
