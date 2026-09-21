@@ -360,6 +360,7 @@ function DatasetFormModal({ dataset, onClose, onSaved }) {
                   <div>
                     <label style={labelStyle}>Doc ID Field</label>
                     <select className="select" style={{width:'100%'}} value={form.beir_doc_id_field} onChange={e=>set('beir_doc_id_field',e.target.value)}>
+                      <option value="corpus_id">corpus_id</option>
                       <option value="pdf_basename">pdf_basename</option>
                       <option value="pdf_page">pdf_page</option>
                       <option value="source_id">source_id</option>

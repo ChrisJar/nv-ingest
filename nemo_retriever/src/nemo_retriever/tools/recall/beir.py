@@ -22,7 +22,7 @@ VALID_BEIR_LOADERS: frozenset[str] = frozenset(
     {"bo10k_csv", "bo767_csv", "earnings_csv", "financebench_json", "jp20_csv", "vidore_hf"}
 )
 VALID_BEIR_DOC_ID_FIELDS: frozenset[str] = frozenset(
-    {"pdf_basename", "pdf_page", "pdf_page_modality", "source_id", "path"}
+    {"corpus_id", "pdf_basename", "pdf_page", "pdf_page_modality", "source_id", "path"}
 )
 REPO_ROOT = Path(__file__).resolve().parents[5]
 BO767_ANNOTATIONS_PATH = REPO_ROOT / "data" / "bo767_query_gt.csv"
@@ -88,7 +88,7 @@ def resolve_beir_dataset_options(
             defaults = BeirDatasetOptions(
                 loader="vidore_hf",
                 dataset_name=normalized_name,
-                doc_id_field="pdf_basename",
+                doc_id_field="corpus_id",
             )
 
     resolved_ks = tuple(int(k) for k in ks) if ks else (defaults.ks if defaults else DEFAULT_BEIR_KS)
@@ -531,7 +531,7 @@ def build_qrels_by_query_id(
 def _vidore_doc_id_from_corpus_row(row: Any, *, doc_id_field: str) -> str | None:
     doc_id = str(_row_get(row, "doc_id") or "").strip()
     corpus_id = _row_get(row, "corpus_id")
-    if doc_id_field == "source_id":
+    if doc_id_field in {"corpus_id", "source_id"}:
         return str(corpus_id)
     if doc_id_field == "path":
         return f"{doc_id}.pdf" if doc_id else None
@@ -758,6 +758,7 @@ def _extract_doc_id_from_hit(hit: dict[str, Any], *, doc_id_field: str) -> str |
         )
 
     fallbacks = {
+        "corpus_id": path.stem,
         "pdf_basename": path.stem,
         "source_id": source_path,
         "path": source_path,

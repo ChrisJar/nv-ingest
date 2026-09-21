@@ -112,6 +112,14 @@ def test_build_beir_run_from_hits_uses_pdf_basename_and_dedupes() -> None:
     assert run["q1"]["doc_a"] > run["q1"]["doc_b"]
 
 
+def test_build_beir_run_from_hits_uses_file_stem_as_corpus_id() -> None:
+    raw_hits = [[{"source_id": "/datasets/vidore/157.pdf"}]]
+
+    run = build_beir_run_from_hits(["q1"], raw_hits, doc_id_field="corpus_id")
+
+    assert run == {"q1": {"157": 1.0}}
+
+
 def test_resolve_beir_dataset_options_supports_known_dataset_name() -> None:
     options = resolve_beir_dataset_options(dataset_name="bo767")
 
@@ -126,7 +134,7 @@ def test_resolve_beir_dataset_options_supports_vidore_dataset_name() -> None:
 
     assert options.loader == "vidore_hf"
     assert options.dataset_name == "vidore_v3_computer_science"
-    assert options.doc_id_field == "pdf_basename"
+    assert options.doc_id_field == "corpus_id"
 
 
 def test_resolve_beir_dataset_options_preserves_explicit_overrides(tmp_path: Path) -> None:
@@ -389,6 +397,25 @@ def test_load_beir_dataset_tries_vidore_config_name_before_data_dir(monkeypatch)
     assert calls[0] == ("vidore/vidore_v3_computer_science", ("queries",), {"split": "test"})
     assert calls[1] == ("vidore/vidore_v3_computer_science", ("qrels",), {"split": "test"})
     assert calls[2] == ("vidore/vidore_v3_computer_science", ("corpus",), {"split": "test"})
+
+
+def test_load_beir_dataset_maps_vidore_corpus_ids_without_losing_scores(monkeypatch) -> None:
+    def _fake_load_dataset(_repo, config, **_kwargs):
+        if config == "queries":
+            return [{"query_id": "q1", "query": "What is shown?", "language": "en"}]
+        if config == "qrels":
+            return [{"query_id": "q1", "corpus_id": 157, "score": 2}]
+        if config == "corpus":
+            return [{"corpus_id": 157, "doc_id": "original_document", "page_number_in_doc": 14}]
+        raise AssertionError("unexpected load_dataset call")
+
+    monkeypatch.setitem(sys.modules, "datasets", type("Datasets", (), {"load_dataset": _fake_load_dataset}))
+
+    dataset = load_beir_dataset(
+        "vidore_hf", dataset_name="vidore_v3_computer_science", doc_id_field="corpus_id"
+    )
+
+    assert dataset.qrels == {"q1": {"157": 2}}
 
 
 def test_load_beir_dataset_falls_back_to_vidore_data_dir(monkeypatch) -> None:

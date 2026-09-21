@@ -50,7 +50,7 @@ def _vidore_v3_dataset(name: str, domain: str) -> DatasetSpec:
         query_file=None,
         input_type="pdf",
         beir_loader="vidore_hf",
-        beir_doc_id_field="pdf_page",
+        beir_doc_id_field="corpus_id",
         description=f"ViDoRe v3 {domain} benchmark slice.",
     )
 

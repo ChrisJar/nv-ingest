@@ -70,7 +70,7 @@ def test_vidore_v3_benchmarks_use_page_level_multimodal_defaults(dataset_name: s
     benchmark = get_benchmark(f"{dataset_name}_beir")
 
     assert dataset.beir_loader == "vidore_hf"
-    assert dataset.beir_doc_id_field == "pdf_page"
+    assert dataset.beir_doc_id_field == "corpus_id"
     assert Path(dataset.path).name == dataset_name
     assert benchmark.dataset == dataset_name
     assert benchmark.ingest["extract"] == {
@@ -84,7 +84,7 @@ def test_vidore_v3_benchmarks_use_page_level_multimodal_defaults(dataset_name: s
     }
     assert benchmark.query["embed_model_name"] == VIDORE_V3_EMBED_MODEL
     assert benchmark.evaluation["dataset_name"] == dataset_name
-    assert benchmark.evaluation["doc_id_field"] == "pdf_page"
+    assert benchmark.evaluation["doc_id_field"] == "corpus_id"
     assert ("finance" in benchmark.tags) is ("finance" in VIDORE_V3_PUBLIC_DATASETS[dataset_name].lower())
 
 

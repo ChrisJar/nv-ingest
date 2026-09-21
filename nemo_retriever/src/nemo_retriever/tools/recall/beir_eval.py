@@ -50,7 +50,7 @@ class BEIREvaluatorActor:
         beir_query_language: Annotated[str, Param(label="Query Language", placeholder="Optional (e.g. en, fr)")] = "",
         beir_doc_id_field: Annotated[
             str,
-            Param(label="Doc ID Field", choices=["pdf_basename", "pdf_page", "source_id", "path"]),
+            Param(label="Doc ID Field", choices=["corpus_id", "pdf_basename", "pdf_page", "source_id", "path"]),
         ] = "pdf_basename",
         beir_ks: Annotated[str, Param(label="K Values", placeholder="1,3,5,10")] = "1,3,5,10",
         hybrid: Annotated[bool, Param(label="Hybrid Search")] = False,
