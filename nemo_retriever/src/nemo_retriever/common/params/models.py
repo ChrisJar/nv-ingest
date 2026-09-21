@@ -326,6 +326,16 @@ class IngestorCreateParams(_ParamsModel):
     max_concurrency: Optional[int] = None
 
 
+class UrlFetchParams(_ParamsModel):
+    """Controls for fetching documents configured with ``ingestor.urls()``."""
+
+    headers: dict[str, str] = Field(default_factory=dict)
+    request_timeout_s: float = Field(default=30.0, gt=0)
+    follow_redirects: bool = True
+    max_response_bytes: int = Field(default=10_000_000, ge=1)
+    max_concurrency: int = Field(default=8, ge=1)
+
+
 class IngestExecuteParams(_ParamsModel):
     show_progress: bool = False
     return_failures: bool = False

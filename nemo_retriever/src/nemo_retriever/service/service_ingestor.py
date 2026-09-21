@@ -92,9 +92,11 @@ from nemo_retriever.common.params import (
     IngestExecuteParams,
     PdfSplitParams,
     StoreParams,
+    UrlFetchParams,
     VdbUploadParams,
     WebhookParams,
 )
+from nemo_retriever.common.url_fetch import UrlFetchFailure, fetch_urls, normalize_urls
 from nemo_retriever.service.client import InMemoryUpload, RetrieverServiceClient, UploadInput
 
 logger = logging.getLogger(__name__)
@@ -447,6 +449,7 @@ class ServiceIngestor(ingestor):
         self._base_url = base_url.rstrip("/")
         self._max_concurrency = max_concurrency
         self._request_timeout_s = request_timeout_s
+        self._url_failures: list[UrlFetchFailure] = []
         self._api_token = (api_token or "").strip() or None
         self._inline_texts: list[str] | None = None
         self._document_ids: list[str] = []
@@ -617,6 +620,18 @@ class ServiceIngestor(ingestor):
             self._documents.append(documents)
         else:
             self._documents.extend(documents)
+        return self
+
+    def urls(
+        self,
+        urls: Union[str, Sequence[str]],
+        params: UrlFetchParams | None = None,
+        **kwargs: Any,
+    ) -> "ServiceIngestor":
+        """Add HTTP(S) sources, fetched by the client when ingestion starts."""
+        self._urls.extend(normalize_urls(urls))
+        merged = _merge_params(params, kwargs)
+        self._url_fetch_params = merged if isinstance(merged, UrlFetchParams) else UrlFetchParams(**merged)
         return self
 
     def texts(self, texts: Union[str, Sequence[str]]) -> Self:
@@ -1245,7 +1260,7 @@ class ServiceIngestor(ingestor):
         )
         del params, kwargs
         self._validate_input_sources(self._inline_texts)
-        if not self._documents and not self._buffers and is_blank_inline_corpus(self._inline_texts):
+        if not self._documents and not self._buffers and not self._urls and is_blank_inline_corpus(self._inline_texts):
             self._document_ids.clear()
             self._last_run_elapsed_s = 0.0
             self._last_job_id = None
@@ -1487,7 +1502,9 @@ class ServiceIngestor(ingestor):
     ) -> AsyncIterator[dict[str, Any]]:
         """Async generator yielding events as documents are processed."""
         result_schema = self._normalize_result_schema(result_schema)
-        files = self._collect_inputs()
+        files = await asyncio.to_thread(self._collect_inputs)
+        for event in self._url_failure_events():
+            yield event
         if not files:
             return
 
@@ -1519,8 +1536,9 @@ class ServiceIngestor(ingestor):
     ) -> Iterator[dict[str, Any]]:
         """Like :meth:`ingest_stream` but passes server-side retention to the HTTP client."""
         files = self._collect_inputs()
+        failure_events = self._url_failure_events()
         if not files:
-            return iter(())
+            return iter(failure_events)
 
         self._document_ids.clear()
 
@@ -1543,7 +1561,12 @@ class ServiceIngestor(ingestor):
             )
 
         bridge = _AsyncToSyncBridge(_factory)
-        return iter(bridge)
+
+        def _events() -> Iterator[dict[str, Any]]:
+            yield from failure_events
+            yield from bridge
+
+        return _events()
 
     async def _aingest_stream_impl(
         self,
@@ -1658,17 +1681,34 @@ class ServiceIngestor(ingestor):
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
+    def _url_failure_events(self) -> list[dict[str, Any]]:
+        return [
+            {"event": "upload_failed", "filename": failure.url, "error": f"URL fetch failed: {failure.message}"}
+            for failure in self._url_failures
+        ]
 
     def _has_mixed_inline_sources(self) -> bool:
-        return bool(self._inline_texts) and bool(self._documents or self._buffers)
+        return bool(self._inline_texts) and bool(self._documents or self._buffers or self._urls)
 
     def _collect_inputs(self) -> list[UploadInput]:
         """Gather filesystem and in-memory inputs for the service client."""
         self._validate_input_sources(self._inline_texts)
-        if not self._documents and not self._buffers and is_blank_inline_corpus(self._inline_texts):
+        if not self._documents and not self._buffers and not self._urls and is_blank_inline_corpus(self._inline_texts):
             return []
 
         files: list[UploadInput] = [Path(p) for p in self._documents]
+
+        fetched, self._url_failures = fetch_urls(self._urls, self._url_fetch_params)
+        for item in fetched:
+            files.append(
+                InMemoryUpload(
+                    filename=item.transport_path,
+                    content=item.content,
+                    content_type=item.content_type,
+                    classification_filename=item.classification_filename,
+                    metadata={"_nrl_source_url": item.url},
+                )
+            )
 
         if self._buffers:
             import tempfile

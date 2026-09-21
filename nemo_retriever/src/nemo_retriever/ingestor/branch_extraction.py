@@ -40,6 +40,27 @@ def ensure_pandas_columns(batch_df: Any, *, columns: tuple[str, ...]) -> Any:
     return batch_df.loc[:, list(columns)]
 
 
+def _restore_value(value: Any, source_map: dict[str, str]) -> Any:
+    if isinstance(value, str):
+        return source_map.get(value, value)
+    if isinstance(value, dict):
+        return {key: _restore_value(item, source_map) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_restore_value(item, source_map) for item in value]
+    return value
+
+
+def restore_source_urls(batch_df: Any, *, source_map: dict[str, str]) -> Any:
+    """Restore caller-facing URLs after suffix-bearing transport identifiers."""
+
+    if not source_map or batch_df.empty:
+        return batch_df
+    for column in ("path", "source_path", "source_id", "metadata"):
+        if column in batch_df.columns:
+            batch_df[column] = batch_df[column].map(lambda value: _restore_value(value, source_map))
+    return batch_df
+
+
 @dataclass
 class ExtractionBranchExecutor:
     """Run manifest extraction branches and common post-extraction stages."""
@@ -48,6 +69,7 @@ class ExtractionBranchExecutor:
     branches: tuple[ExtractionBranchPlan, ...]
     documents: list[str]
     buffers: list[tuple[str, BytesIO]]
+    source_map: dict[str, str]
     inline_rows: list[dict[str, str]]
     split_config: dict[str, Any]
     extract_params: Any | None
@@ -109,12 +131,12 @@ class ExtractionBranchExecutor:
                 video_frame_params=effective_extraction.video_frame_params,
                 extraction_mode=effective_extraction.extraction_mode,
             )
-            file_paths, inline_rows = self._partition_branch_inputs(branch)
+            file_paths, in_memory_rows = self._partition_branch_inputs(branch)
             inputs: list[Any] = []
             if file_paths:
                 inputs.append(file_paths)
-            if inline_rows:
-                inputs.append(ray_module.data.from_items(inline_rows))
+            if in_memory_rows:
+                inputs.append(ray_module.data.from_items(in_memory_rows))
             for input_data in inputs:
                 executor = self._ray_executor(
                     graph,
@@ -160,7 +182,17 @@ class ExtractionBranchExecutor:
             )
 
         for executor, input_data in branch_inputs:
-            branch_datasets.append(executor.build_dataset(input_data))
+            dataset = executor.build_dataset(input_data)
+            if self.source_map:
+                dataset = dataset.map_batches(
+                    call_pandas_function_on_arrow,
+                    batch_format="pyarrow",
+                    fn_kwargs={
+                        "fn": restore_source_urls,
+                        "fn_kwargs": {"source_map": self.source_map},
+                    },
+                )
+            branch_datasets.append(dataset)
         normalized = normalize_ray_branch_datasets(branch_datasets)
         combined = normalized[0]
         for branch_ds in normalized[1:]:
@@ -179,7 +211,9 @@ class ExtractionBranchExecutor:
             )
             graph = self._build_extraction_only_graph(effective_extraction)
             executor = InprocessExecutor(graph, show_progress=self.show_progress)
-            frames.append(executor.ingest(self._inprocess_branch_input(branch)))
+            frames.append(
+                restore_source_urls(executor.ingest(self._inprocess_branch_input(branch)), source_map=self.source_map)
+            )
 
         combined = concat_dataframes(frames)
         logger.info("Retriever ingest post-extraction stages: %s", format_post_stage_summary(self.post_extract_order))
@@ -287,17 +321,20 @@ class ExtractionBranchExecutor:
     def _inline_rows_by_path(self) -> dict[str, dict[str, str]]:
         return {row["path"]: row for row in self.inline_rows}
 
-    def _partition_branch_inputs(self, branch: ExtractionBranchPlan) -> tuple[list[str], list[dict[str, str]]]:
+    def _partition_branch_inputs(self, branch: ExtractionBranchPlan) -> tuple[list[str], list[dict[str, Any]]]:
         inline_by_path = self._inline_rows_by_path()
+        buffer_by_name = {name: buf for name, buf in self.buffers}
         file_paths: list[str] = []
-        inline_rows: list[dict[str, str]] = []
+        in_memory_rows: list[dict[str, Any]] = []
         for path in branch.input_paths:
             row = inline_by_path.get(path)
-            if row is None:
-                file_paths.append(path)
+            if row is not None:
+                in_memory_rows.append(row)
+            elif path in buffer_by_name:
+                in_memory_rows.append({"bytes": buffer_by_name[path].getvalue(), "path": path})
             else:
-                inline_rows.append(row)
-        return file_paths, inline_rows
+                file_paths.append(path)
+        return file_paths, in_memory_rows
 
 
 def merge_node_overrides(

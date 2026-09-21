@@ -851,11 +851,16 @@ def _merge_document_metadata(result: Any, document_metadata: dict[str, Any] | No
     # Validate and copy at the child-process boundary so storage receives no
     # aliases or values that cannot be represented in JSON query hits.
     canonical = json.loads(json.dumps(document_metadata, ensure_ascii=False))
+    source_url = canonical.pop("_nrl_source_url", None)
 
     def merge_row(row: Any) -> None:
         if not isinstance(row, dict):
             return
         metadata = row.get("metadata")
+        if isinstance(source_url, str):
+            for field in ("path", "source_path", "source_id"):
+                if isinstance(row.get(field), str) and row[field].startswith("url-source://"):
+                    row[field] = source_url
         if not isinstance(metadata, dict):
             metadata = {}
             row["metadata"] = metadata
@@ -863,6 +868,8 @@ def _merge_document_metadata(result: Any, document_metadata: dict[str, Any] | No
         if not isinstance(content_metadata, dict):
             content_metadata = {}
             metadata["content_metadata"] = content_metadata
+        if isinstance(source_url, str) and isinstance(metadata.get("source_path"), str):
+            metadata["source_path"] = source_url
         for key, value in canonical.items():
             content_metadata.setdefault(key, copy.deepcopy(value))
 
@@ -872,9 +879,12 @@ def _merge_document_metadata(result: Any, document_metadata: dict[str, Any] | No
         return
     if hasattr(result, "iterrows"):
         for index, row in result.iterrows():
-            holder = {"metadata": row.get("metadata")}
+            fields = ("path", "source_path", "source_id", "metadata")
+            holder = {field: row.get(field) for field in fields if field in result.columns}
             merge_row(holder)
-            result.at[index, "metadata"] = holder["metadata"]
+            for field, value in holder.items():
+                if field in result.columns:
+                    result.at[index, field] = value
 
 
 def _local_model_runtime_kwargs(local: "LocalModelsConfig") -> dict[str, Any]:
