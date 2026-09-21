@@ -514,6 +514,13 @@ class ExtractParams(_ParamsModel):
     # Extraction flags
     extract_text: bool = True
     extract_images: bool = True
+    extract_nested_images: bool = Field(
+        default=False,
+        description=(
+            "When extract_images is enabled for PDFium extraction, also emit decoded raster IMAGE objects nested "
+            "inside Form XObjects. Each placement is emitted, including repeated uses of the same bitmap."
+        ),
+    )
     extract_tables: bool = True
     extract_charts: bool = True
     extract_infographics: bool = False

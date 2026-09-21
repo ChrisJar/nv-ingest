@@ -265,6 +265,7 @@ def test_root_ingest_service_mode_uses_service_ingest_core(tmp_path, monkeypatch
             "--dpi",
             "300",
             "--extract-images",
+            "--extract-nested-images",
             "--embed-granularity",
             "page",
             "--dedup",
@@ -289,6 +290,7 @@ def test_root_ingest_service_mode_uses_service_ingest_core(tmp_path, monkeypatch
     assert captured["extraction_mode"] == "auto"
     assert captured["extract_params"].dpi == 300
     assert captured["extract_params"].extract_images is True
+    assert captured["extract_params"].extract_nested_images is True
     assert captured["split_config"]["pdf"]["max_tokens"] == 64
     assert captured["dedup_params"].iou_threshold == 0.6
     assert captured["caption_params"].context_text_max_chars == 12
@@ -1279,6 +1281,7 @@ def test_root_ingest_service_help_hides_local_only_options() -> None:
     assert "--dedup" in result.output
     assert "--no-dedup" in result.output
     assert "--extract-images" in result.output
+    assert "--extract-nested-images" in result.output
     assert "--embed-granular" in result.output
     assert "--lancedb-uri" not in result.output
     assert "--overwrite" not in result.output
@@ -1442,6 +1445,7 @@ def test_root_ingest_passes_high_level_extract_overrides(monkeypatch, tmp_path) 
             "250",
             "--no-extract-tables",
             "--no-extract-images",
+            "--extract-nested-images",
             "--no-extract-charts",
             "--no-extract-page-as-image",
         ],
@@ -1454,6 +1458,7 @@ def test_root_ingest_passes_high_level_extract_overrides(monkeypatch, tmp_path) 
     assert extract_params.dpi == 250
     assert extract_params.extract_text is True
     assert extract_params.extract_images is False
+    assert extract_params.extract_nested_images is True
     assert extract_params.extract_tables is False
     assert extract_params.extract_charts is False
     assert extract_params.extract_infographics is False

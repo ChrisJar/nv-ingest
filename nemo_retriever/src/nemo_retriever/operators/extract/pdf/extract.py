@@ -18,6 +18,7 @@ except ImportError:
 from nemo_retriever.common.api.util.pdf.pdfium import (
     convert_bitmap_to_corrected_numpy,
     extract_image_like_objects_from_pdfium_page,
+    extract_nested_simple_images_from_pdfium_page,
     is_scanned_page as _is_scanned_page,
 )
 
@@ -69,6 +70,7 @@ def build_pdf_extraction_kwargs(params: ExtractParams) -> dict[str, Any]:
         "render_mode": params.render_mode,
         "extract_text": params.extract_text,
         "extract_images": params.extract_images,
+        "extract_nested_images": params.extract_nested_images,
         "extract_tables": params.extract_tables,
         "extract_charts": params.extract_charts,
         "extract_infographics": params.extract_infographics,
@@ -227,6 +229,7 @@ def pdf_extraction(
     pdf_binary: Any,
     extract_text: bool = False,
     extract_images: bool = False,
+    extract_nested_images: bool = False,
     extract_tables: bool = False,
     extract_charts: bool = False,
     extract_infographics: bool = False,
@@ -389,6 +392,28 @@ def pdf_extraction(
                                 )
                         except Exception:
                             pass  # Image extraction failure should not crash the pipeline.
+
+                        if extract_nested_images:
+                            try:
+                                nested_images = extract_nested_simple_images_from_pdfium_page(page)
+                                for img in nested_images:
+                                    max_w = float(img.max_width) if img.max_width else 1.0
+                                    max_h = float(img.max_height) if img.max_height else 1.0
+                                    x0, y0, x1, y1 = img.bbox
+                                    detected_images.append(
+                                        {
+                                            "bbox_xyxy_norm": [
+                                                x0 / max_w,
+                                                y0 / max_h,
+                                                x1 / max_w,
+                                                y1 / max_h,
+                                            ],
+                                            "text": "",
+                                            "image_b64": img.image,
+                                        }
+                                    )
+                            except Exception:
+                                pass  # Nested image extraction failure should not crash the pipeline.
 
                     page_record: Dict[str, Any] = {
                         "path": pdf_path,
