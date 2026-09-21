@@ -30,9 +30,9 @@ operator output columns, not to document extraction.
 ### Configure at least one input source
 
 Before you call `.ingest()`, `.ingest_stream()`, or `.aingest_stream()`,
-configure at least one input source by calling `.files()`, `.texts()`, or
-`.buffers()` with a nonempty value. Omitting input configuration or passing an
-empty collection raises `ValueError` before pipeline execution.
+configure at least one input source by calling `.files()`, `.urls()`,
+`.texts()`, or `.buffers()` with a nonempty value. Omitting input configuration
+or passing an empty collection raises `ValueError` before pipeline execution.
 
 A configured source can legitimately produce blank text or an empty result.
 For example, OCR can find no text on an image-only page. This outcome does not
@@ -41,6 +41,70 @@ raise the missing-input error.
 A nonempty optional glob passed to `.files()` also counts as a configured
 source. If it matches no files, `.ingest()` can return an empty result, and the
 streaming methods can yield no results.
+
+### Fetch content from URLs { #fetch-content-from-urls }
+
+Call `.urls()` with one absolute HTTP or HTTPS URL, or a sequence of URLs. URL
+fetching is lazy and starts when you call an ingest method. NeMo Retriever
+Library performs the HTTP GET requests in the Python SDK process. In service
+mode, the client fetches the content and sends it to the Retriever service.
+
+The response must match an existing [supported input
+format](multimodal-extraction.md#supported-file-types-and-formats). NeMo
+Retriever Library uses the response content type and filename information to
+select the extraction path. HTML responses use the same MarkItDown conversion
+as local `.html` files. Results retain the submitted URL as the source path,
+including when the request follows a redirect.
+
+The following example fetches and extracts a PDF.
+
+```python
+from nemo_retriever import create_ingestor
+
+pdf_url = "https://ontheline.trincoll.edu/images/bookdown/sample-local-pdf.pdf"
+
+result, failures = (
+    create_ingestor(run_mode="batch")
+    .urls([pdf_url])
+    .extract()
+    .ingest(return_failures=True)
+)
+```
+
+Pass `UrlFetchParams` or equivalent keyword arguments to `.urls()` when you
+need to configure the HTTP requests.
+
+```python
+from nemo_retriever import create_ingestor
+from nemo_retriever.common.params import UrlFetchParams
+
+fetch_params = UrlFetchParams(
+    headers={"Authorization": "Bearer <token>"},
+    request_timeout_s=60,
+    follow_redirects=True,
+    max_response_bytes=20_000_000,
+    max_concurrency=4,
+)
+
+ingestor = create_ingestor(run_mode="inprocess").urls(
+    ["https://example.com/private-document.html"],
+    params=fetch_params,
+)
+```
+
+`UrlFetchParams` defaults to no custom headers, a 30-second request timeout,
+redirect following, a 10,000,000-byte response limit, and eight concurrent
+requests. The same settings apply to `inprocess`, `batch`, and `service` run
+modes.
+
+Invalid URLs and unsupported URL schemes raise a configuration error. HTTP
+error responses, timeouts, network failures, oversized responses, and
+unsupported response formats are per-URL failures. Pass
+`return_failures=True` to keep successful results and receive failures as
+`(url, error_message)` tuples. Without that option, graph run modes raise
+`GraphIngestionError` for URL fetch failures. With that option, service mode
+returns `(ServiceIngestResult, failures)`. A normal service result also retains
+server-side document failures in `ServiceIngestResult.failures`.
 
 ### Select a supported extraction method
 

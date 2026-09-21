@@ -60,6 +60,33 @@ ingestor = (
 chunks = ingestor.ingest()  # pandas.DataFrame (batch and inprocess)
 ```
 
+You can fetch supported content directly from HTTP and HTTPS URLs. URL requests
+run lazily when you call `.ingest()`, and each result retains its original URL
+as the source path.
+
+```python
+from nemo_retriever import create_ingestor
+
+urls = [
+  "https://ontheline.trincoll.edu/images/bookdown/sample-local-pdf.pdf",
+]
+
+results, failures = (
+  create_ingestor(run_mode="batch")
+  .urls(urls)
+  .extract()
+  .embed()
+  .vdb_upload()
+  .ingest(return_failures=True)
+)
+```
+
+Pass `UrlFetchParams` to `.urls()` to configure shared request headers, the
+request timeout, redirect handling, response-size limits, and concurrency.
+HTML responses use the same MarkItDown conversion as local `.html` files. Refer
+to the [Python API guide](docs/docs/extraction/nemo-retriever-api-reference.md#fetch-content-from-urls)
+for defaults and failure behavior.
+
 You can see the extracted text that represents the content of the ingested test document.
 
 ```python

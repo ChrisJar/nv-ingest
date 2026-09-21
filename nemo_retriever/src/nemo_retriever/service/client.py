@@ -113,6 +113,7 @@ class InMemoryUpload(NamedTuple):
     content: bytes
     content_type: str = "application/octet-stream"
     classification_filename: str | None = None
+    metadata: dict[str, Any] | None = None
 
 
 UploadInput = Path | InMemoryUpload
@@ -886,14 +887,20 @@ class RetrieverServiceClient:
             filename = source.name
             content_type = "application/octet-stream"
             classification_filename = None
+            source_metadata = None
         else:
             file_bytes = source.content
             filename = source.filename
             content_type = source.content_type
             classification_filename = source.classification_filename
+            source_metadata = source.metadata
         meta_payload: dict[str, Any] = dict(metadata or {})
         if classification_filename is not None:
             meta_payload.setdefault("filename", classification_filename)
+        if source_metadata:
+            document_metadata = dict(meta_payload.get("metadata") or {})
+            document_metadata.update(source_metadata)
+            meta_payload["metadata"] = document_metadata
         if pipeline_spec is not None:
             meta_payload["pipeline"] = pipeline_spec
         meta_json = json.dumps(meta_payload)
