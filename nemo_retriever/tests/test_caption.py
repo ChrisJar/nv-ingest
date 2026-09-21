@@ -217,6 +217,40 @@ def test_pdf_extraction_does_not_extract_nested_images_by_default(mock_extract, 
     mock_extract_nested.assert_not_called()
 
 
+@patch("nemo_retriever.operators.extract.pdf.extract.extract_nested_simple_images_from_pdfium_page")
+@patch("nemo_retriever.operators.extract.pdf.extract.extract_image_like_objects_from_pdfium_page")
+def test_pdf_extraction_records_nested_image_failure(mock_extract, mock_extract_nested):
+    _ext = pytest.importorskip("nemo_retriever.operators.extract.pdf.extract")
+    pdfium = pytest.importorskip("pypdfium2")
+    from nemo_retriever.models.nim.error_reporter import drain_errors
+
+    mock_extract.return_value = []
+    mock_extract_nested.side_effect = RuntimeError("nested image budget exceeded")
+    drain_errors()
+
+    doc = pdfium.PdfDocument.new()
+    doc.new_page(612, 792)
+    buf = io.BytesIO()
+    doc.save(buf)
+    doc.close()
+
+    result = _ext.pdf_extraction(
+        pd.DataFrame([{"bytes": buf.getvalue(), "path": "t.pdf", "page_number": 1}]),
+        extract_images=True,
+        extract_nested_images=True,
+    )
+
+    row = result.iloc[0]
+    assert row["images"] == []
+    assert row["metadata"]["error"]["stage"] == "page_processing"
+    assert row["metadata"]["error"]["type"] == "RuntimeError"
+    assert row["metadata"]["error"]["message"] == "nested image budget exceeded"
+    errors = drain_errors()
+    assert len(errors) == 1
+    assert errors[0].stage == "pdf_extraction:page_processing"
+    assert errors[0].message == "nested image budget exceeded"
+
+
 def test_explode_includes_captioned_images():
     from nemo_retriever.common.modality.content_transforms import explode_content_to_rows
 

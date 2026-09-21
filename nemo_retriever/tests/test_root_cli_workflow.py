@@ -1445,7 +1445,6 @@ def test_root_ingest_passes_high_level_extract_overrides(monkeypatch, tmp_path) 
             "250",
             "--no-extract-tables",
             "--no-extract-images",
-            "--extract-nested-images",
             "--no-extract-charts",
             "--no-extract-page-as-image",
         ],
@@ -1458,7 +1457,6 @@ def test_root_ingest_passes_high_level_extract_overrides(monkeypatch, tmp_path) 
     assert extract_params.dpi == 250
     assert extract_params.extract_text is True
     assert extract_params.extract_images is False
-    assert extract_params.extract_nested_images is True
     assert extract_params.extract_tables is False
     assert extract_params.extract_charts is False
     assert extract_params.extract_infographics is False

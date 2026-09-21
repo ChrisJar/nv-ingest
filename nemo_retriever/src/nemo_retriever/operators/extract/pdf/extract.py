@@ -394,26 +394,23 @@ def pdf_extraction(
                             pass  # Image extraction failure should not crash the pipeline.
 
                         if extract_nested_images:
-                            try:
-                                nested_images = extract_nested_simple_images_from_pdfium_page(page)
-                                for img in nested_images:
-                                    max_w = float(img.max_width) if img.max_width else 1.0
-                                    max_h = float(img.max_height) if img.max_height else 1.0
-                                    x0, y0, x1, y1 = img.bbox
-                                    detected_images.append(
-                                        {
-                                            "bbox_xyxy_norm": [
-                                                x0 / max_w,
-                                                y0 / max_h,
-                                                x1 / max_w,
-                                                y1 / max_h,
-                                            ],
-                                            "text": "",
-                                            "image_b64": img.image,
-                                        }
-                                    )
-                            except Exception:
-                                pass  # Nested image extraction failure should not crash the pipeline.
+                            nested_images = extract_nested_simple_images_from_pdfium_page(page)
+                            for img in nested_images:
+                                max_w = float(img.max_width) if img.max_width else 1.0
+                                max_h = float(img.max_height) if img.max_height else 1.0
+                                x0, y0, x1, y1 = img.bbox
+                                detected_images.append(
+                                    {
+                                        "bbox_xyxy_norm": [
+                                            x0 / max_w,
+                                            y0 / max_h,
+                                            x1 / max_w,
+                                            y1 / max_h,
+                                        ],
+                                        "text": "",
+                                        "image_b64": img.image,
+                                    }
+                                )
 
                     page_record: Dict[str, Any] = {
                         "path": pdf_path,

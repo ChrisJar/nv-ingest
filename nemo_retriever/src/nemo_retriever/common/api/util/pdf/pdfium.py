@@ -2,7 +2,9 @@
 # All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 import logging
+from collections.abc import Iterator
 from typing import List, Any
 from typing import Optional
 from typing import Tuple
@@ -34,6 +36,10 @@ from nemo_retriever.common.api.util.metadata.aggregators import Base64Image
 from nemo_retriever.models.nim.primitives.default_values import YOLOX_PAGE_IMAGE_FORMAT
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_MAX_NESTED_IMAGE_COUNT = 256
+DEFAULT_MAX_NESTED_IMAGE_DECODED_PIXELS = 50_000_000
+DEFAULT_MAX_NESTED_IMAGE_SOURCE_BYTES = 64 * 1024 * 1024
 
 
 def _compute_render_scale_to_fit(
@@ -327,11 +333,16 @@ def extract_simple_images_from_pdfium_page(page, max_depth):
     return extracted_images
 
 
-def _iter_nested_images(page, form, parent_matrix, depth=1, max_depth=32):
+def _iter_nested_images(
+    page: pdfium.PdfPage,
+    form: pdfium.PdfObject,
+    parent_matrix: pdfium.PdfMatrix,
+    depth: int = 1,
+    max_depth: int = 32,
+) -> Iterator[tuple[pdfium.PdfImage, pdfium.PdfMatrix]]:
     """Yield nested image objects with the matrix that maps them to page space."""
     if depth > max_depth:
-        logger.warning("Skipping PDF Form XObject nesting deeper than %d levels", max_depth)
-        return
+        raise RuntimeError(f"PDF Form XObject nesting exceeds the {max_depth}-level limit")
 
     for obj in page.get_objects(max_depth=1, form=form.raw):
         if obj.type == pdfium_c.FPDF_PAGEOBJ_IMAGE:
@@ -341,44 +352,150 @@ def _iter_nested_images(page, form, parent_matrix, depth=1, max_depth=32):
             yield from _iter_nested_images(page, obj, child_to_page, depth=depth + 1, max_depth=max_depth)
 
 
-def extract_nested_simple_images_from_pdfium_page(page):
-    """Extract every raster image placement nested inside a PDF Form XObject.
+def _visible_page_bbox(
+    position: tuple[float, float, float, float], page_width: float, page_height: float
+) -> list[int] | None:
+    """Return a valid visible page-space box, or ``None`` when no positive intersection exists."""
+    left, bottom, right, top = position
+    visible_position = (
+        max(0.0, left),
+        max(0.0, bottom),
+        min(page_width, right),
+        min(page_height, top),
+    )
+    if visible_position[0] >= visible_position[2] or visible_position[1] >= visible_position[3]:
+        return None
+
+    bbox = convert_pdfium_position(visible_position, page_width, page_height)
+    if bbox[0] >= bbox[2] or bbox[1] >= bbox[3]:
+        return None
+    return bbox
+
+
+def _nested_image_source_key(
+    image_obj: pdfium.PdfImage,
+    *,
+    image_size: tuple[int, int],
+    max_source_bytes: int,
+) -> tuple[tuple[int, int], tuple[str, ...], int, int, bytes] | None:
+    """Build a source-image key without decoding its bitmap."""
+    source_size = int(pdfium_c.FPDFImageObj_GetImageDataRaw(image_obj, None, 0))
+    if source_size > max_source_bytes:
+        raise RuntimeError(f"Nested PDF image source is {source_size:,} bytes; limit is {max_source_bytes:,} bytes")
+    if source_size <= 0:
+        return None
+
+    source_data = image_obj.get_data(decode_simple=False)
+    if len(source_data) != source_size:
+        raise RuntimeError(f"Nested PDF image source size changed from {source_size:,} to {len(source_data):,} bytes")
+    metadata = image_obj.get_metadata()
+    digest = hashlib.sha256(memoryview(source_data)).digest()
+    return (
+        image_size,
+        tuple(image_obj.get_filters()),
+        int(metadata.bits_per_pixel),
+        int(metadata.colorspace),
+        digest,
+    )
+
+
+def extract_nested_simple_images_from_pdfium_page(
+    page: pdfium.PdfPage,
+    *,
+    max_images: int = DEFAULT_MAX_NESTED_IMAGE_COUNT,
+    max_decoded_pixels: int = DEFAULT_MAX_NESTED_IMAGE_DECODED_PIXELS,
+    max_source_bytes: int = DEFAULT_MAX_NESTED_IMAGE_SOURCE_BYTES,
+) -> list[Base64Image]:
+    """Extract bounded raster image placements nested in PDF Form XObjects.
 
     Image payloads retain their intrinsic bitmap resolution. Bounding boxes are
     transformed through their parent Forms and converted to top-left page space.
-    Repeated placements of the same bitmap are intentionally retained.
+    Repeated placements remain separate results but reuse one encoded source payload.
+
+    Parameters
+    ----------
+    page : pypdfium2.PdfPage
+        PDFium page whose Form XObjects are inspected.
+    max_images : int, optional
+        Maximum number of nested image placements inspected on the page.
+    max_decoded_pixels : int, optional
+        Maximum cumulative pixels decoded across unique source images on the page.
+    max_source_bytes : int, optional
+        Maximum raw encoded bytes read for any one source image.
+
+    Returns
+    -------
+    list[Base64Image]
+        Decoded source images with visible page-space bounding boxes.
+
+    Raises
+    ------
+    ValueError
+        If any extraction budget is not positive.
+    RuntimeError
+        If a Form is too deeply nested, an extraction budget is exceeded, or
+        PDFium cannot decode a nested image.
+    pypdfium2.PdfiumError
+        If PDFium cannot enumerate or inspect a nested image object.
     """
+    if max_images < 1 or max_decoded_pixels < 1 or max_source_bytes < 1:
+        raise ValueError("Nested image extraction budgets must all be positive")
+
     page_width = page.get_width()
     page_height = page.get_height()
-    extracted_images = []
+    extracted_images: list[Base64Image] = []
+    payload_cache: dict[tuple[tuple[int, int], tuple[str, ...], int, int, bytes], str] = {}
+    occurrence_count = 0
+    decoded_pixels = 0
 
-    try:
-        forms = page.get_objects(filter=(pdfium_c.FPDF_PAGEOBJ_FORM,), max_depth=1)
-        for form in forms:
-            for obj, parent_matrix in _iter_nested_images(page, form, form.get_matrix()):
+    forms = page.get_objects(filter=(pdfium_c.FPDF_PAGEOBJ_FORM,), max_depth=1)
+    for form in forms:
+        for obj, parent_matrix in _iter_nested_images(page, form, form.get_matrix()):
+            occurrence_count += 1
+            if occurrence_count > max_images:
+                raise RuntimeError(f"Nested PDF image count exceeds the per-page limit of {max_images:,}")
+
+            page_position = parent_matrix.on_rect(*obj.get_pos())
+            image_bbox = _visible_page_bbox(page_position, page_width, page_height)
+            if image_bbox is None:
+                continue
+
+            image_size = obj.get_size()
+            if image_size[0] < 10 and image_size[1] < 10:
+                continue
+
+            source_key = _nested_image_source_key(
+                obj,
+                image_size=image_size,
+                max_source_bytes=max_source_bytes,
+            )
+            image_base64 = payload_cache.get(source_key) if source_key is not None else None
+            if image_base64 is None:
+                image_pixels = image_size[0] * image_size[1]
+                if decoded_pixels + image_pixels > max_decoded_pixels:
+                    raise RuntimeError(
+                        f"Nested PDF images exceed the per-page decoded-pixel limit of {max_decoded_pixels:,}"
+                    )
+                decoded_pixels += image_pixels
+
                 try:
                     image_numpy = convert_bitmap_to_corrected_numpy(obj.get_bitmap(render=False))
-                    image_base64: str = numpy_to_base64(image_numpy, format=YOLOX_PAGE_IMAGE_FORMAT)
-                    image_size = obj.get_size()
-                    if image_size[0] < 10 and image_size[1] < 10:
-                        continue
-
-                    page_position = parent_matrix.on_rect(*obj.get_pos())
-                    image_bbox = convert_pdfium_position(page_position, page_width, page_height)
-                    extracted_images.append(
-                        Base64Image(
-                            image=image_base64,
-                            bbox=image_bbox,
-                            width=image_size[0],
-                            height=image_size[1],
-                            max_width=page_width,
-                            max_height=page_height,
-                        )
-                    )
                 except Exception as e:
-                    logger.exception(f"Unhandled error extracting nested image: {e}")
-    except Exception as e:
-        logger.exception(f"Unhandled error enumerating nested images: {e}")
+                    raise RuntimeError("PDFium failed to decode a nested PDF image") from e
+                image_base64 = numpy_to_base64(image_numpy, format=YOLOX_PAGE_IMAGE_FORMAT)
+                if source_key is not None:
+                    payload_cache[source_key] = image_base64
+
+            extracted_images.append(
+                Base64Image(
+                    image=image_base64,
+                    bbox=image_bbox,
+                    width=image_size[0],
+                    height=image_size[1],
+                    max_width=page_width,
+                    max_height=page_height,
+                )
+            )
 
     return extracted_images
 
