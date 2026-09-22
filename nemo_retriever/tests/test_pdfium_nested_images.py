@@ -9,7 +9,55 @@ from pathlib import Path
 import pytest
 
 
-def test_extract_nested_form_images_caches_sources_and_preserves_placements(monkeypatch) -> None:
+def _pdf_with_decode_variants() -> bytes:
+    raw_pixels = bytes(range(100))
+    form_stream = b"q 10 0 0 10 10 10 cm /Im1 Do Q\nq 10 0 0 10 30 10 cm /Im2 Do Q"
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        (
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] "
+            b"/Resources << /XObject << /Fm1 5 0 R >> >> /Contents 4 0 R >>"
+        ),
+        b"<< /Length 12 >>\nstream\nq /Fm1 Do Q\nendstream",
+        (
+            b"<< /Type /XObject /Subtype /Form /BBox [0 0 100 100] "
+            b"/Resources << /XObject << /Im1 6 0 R /Im2 7 0 R >> >> /Length "
+            + str(len(form_stream)).encode()
+            + b" >>\nstream\n"
+            + form_stream
+            + b"\nendstream"
+        ),
+        (
+            b"<< /Type /XObject /Subtype /Image /Width 10 /Height 10 /ColorSpace /DeviceGray "
+            b"/BitsPerComponent 8 /Decode [0 1] /Length 100 >>\nstream\n" + raw_pixels + b"\nendstream"
+        ),
+        (
+            b"<< /Type /XObject /Subtype /Image /Width 10 /Height 10 /ColorSpace /DeviceGray "
+            b"/BitsPerComponent 8 /Decode [1 0] /Length 100 >>\nstream\n" + raw_pixels + b"\nendstream"
+        ),
+    ]
+
+    pdf = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
+    offsets = [0]
+    for index, obj in enumerate(objects, start=1):
+        offsets.append(len(pdf))
+        pdf.extend(f"{index} 0 obj\n".encode())
+        pdf.extend(obj)
+        pdf.extend(b"\nendobj\n")
+
+    xref_offset = len(pdf)
+    pdf.extend(f"xref\n0 {len(objects) + 1}\n".encode())
+    pdf.extend(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        pdf.extend(f"{offset:010d} 00000 n \n".encode())
+
+    pdf.extend(f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n".encode())
+    pdf.extend(f"startxref\n{xref_offset}\n%%EOF\n".encode())
+    return bytes(pdf)
+
+
+def test_extract_nested_form_images_decodes_each_placement(monkeypatch) -> None:
     pdfium = pytest.importorskip("pypdfium2")
     from nemo_retriever.common.api.util.pdf.pdfium import extract_nested_simple_images_from_pdfium_page
 
@@ -38,12 +86,25 @@ def test_extract_nested_form_images_caches_sources_and_preserves_placements(monk
     assert all(0 <= image.bbox[1] < image.bbox[3] <= image.max_height for image in images)
     assert {(image.width, image.height) for image in images} == {(256, 256), (512, 512)}
     assert len({image.image for image in images}) == 5
-    assert decode_count == 5
+    assert decode_count == 18
 
-    payload_ids: dict[str, int] = {}
-    for image in images:
-        payload_ids.setdefault(image.image, id(image.image))
-        assert id(image.image) == payload_ids[image.image]
+
+def test_decode_state_is_not_reused_and_source_budget_is_aggregate() -> None:
+    pdfium = pytest.importorskip("pypdfium2")
+    from nemo_retriever.common.api.util.pdf.pdfium import extract_nested_simple_images_from_pdfium_page
+
+    document = pdfium.PdfDocument(_pdf_with_decode_variants())
+    page = document[0]
+    try:
+        images = extract_nested_simple_images_from_pdfium_page(page)
+        assert len(images) == 2
+        assert images[0].image != images[1].image
+
+        with pytest.raises(RuntimeError, match="raw source-byte limit"):
+            extract_nested_simple_images_from_pdfium_page(page, max_source_bytes=199)
+    finally:
+        page.close()
+        document.close()
 
 
 @pytest.mark.parametrize(
@@ -51,7 +112,7 @@ def test_extract_nested_form_images_caches_sources_and_preserves_placements(monk
     [
         ({"max_images": 17}, "count exceeds"),
         ({"max_decoded_pixels": 1}, "decoded-pixel limit"),
-        ({"max_source_bytes": 1}, "source is"),
+        ({"max_source_bytes": 1}, "raw source-byte limit"),
     ],
 )
 def test_extract_nested_form_images_enforces_predecode_budgets(monkeypatch, limits, message) -> None:

@@ -73,17 +73,17 @@ retriever ingest service report.pdf \
 Nested image extraction has the following output behavior:
 
 - It adds nested raster images to the default rendered regions. The output can contain both a composite Form region and its individual source images.
-- It emits each occurrence of a decodable nested IMAGE object. Repeated placements of the same source remain separate output elements, but reuse the cached encoded payload.
+- It emits each occurrence of a decodable nested IMAGE object. Repeated placements of the same source remain separate output elements. Each occurrence is decoded independently. The extractor does not reuse encoded payloads across PDF image objects because their render state can differ.
 - It returns each decoded source bitmap at its intrinsic pixel dimensions. The payload resolution is independent of the PDF page-render DPI.
 - It reports each occurrence location as normalized page-space coordinates in `bbox_xyxy_norm`.
 
 Nested image extraction enforces the following limits:
 
 - A maximum of 256 nested image occurrences per page.
-- A maximum of 50,000,000 decoded pixels across unique source images per page.
-- A maximum of 64 MiB of raw source data for each unique image.
+- A maximum of 50,000,000 decoded pixels, summed across all nested image placements on a page.
+- A maximum of 64 MiB of raw source data, summed across all nested image placements on a page.
 
-If an image cannot be decoded or a limit is exceeded, extraction reports a page error through the existing error metadata. It does not return partial nested image output for that page.
+If supplemental nested image extraction fails or exceeds a limit, the extractor discards all nested image additions for that page. It preserves successful base results, including text, the rendered page image, and default rendered image regions. The extractor records the failure in `metadata.error` with the `nested_images` stage and reports it through the operator error output.
 
 To remove repeated image content after extraction, add a `.dedup(...)` stage. For configuration details, refer to [Control image deduplication](#control-image-deduplication).
 

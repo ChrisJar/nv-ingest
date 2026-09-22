@@ -224,7 +224,12 @@ def test_pdf_extraction_records_nested_image_failure(mock_extract, mock_extract_
     pdfium = pytest.importorskip("pypdfium2")
     from nemo_retriever.models.nim.error_reporter import drain_errors
 
-    mock_extract.return_value = []
+    base_image = MagicMock()
+    base_image.image = "base-image"
+    base_image.bbox = [10, 20, 100, 200]
+    base_image.max_width = 612
+    base_image.max_height = 792
+    mock_extract.return_value = [base_image]
     mock_extract_nested.side_effect = RuntimeError("nested image budget exceeded")
     drain_errors()
 
@@ -241,13 +246,15 @@ def test_pdf_extraction_records_nested_image_failure(mock_extract, mock_extract_
     )
 
     row = result.iloc[0]
-    assert row["images"] == []
-    assert row["metadata"]["error"]["stage"] == "page_processing"
+    assert row["page_image"] is not None
+    assert len(row["images"]) == 1
+    assert row["images"][0]["image_b64"] == "base-image"
+    assert row["metadata"]["error"]["stage"] == "nested_images"
     assert row["metadata"]["error"]["type"] == "RuntimeError"
     assert row["metadata"]["error"]["message"] == "nested image budget exceeded"
     errors = drain_errors()
     assert len(errors) == 1
-    assert errors[0].stage == "pdf_extraction:page_processing"
+    assert errors[0].stage == "pdf_extraction:nested_images"
     assert errors[0].message == "nested image budget exceeded"
 
 
