@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, replace
 from io import BytesIO
+from pathlib import Path
 from typing import Any, Callable
 
 from nemo_retriever.graph import InprocessExecutor, RayDataExecutor
@@ -52,6 +53,24 @@ def restore_source_urls(batch_df: Any, *, source_map: dict[str, str]) -> Any:
     return batch_df
 
 
+def _driver_local_files_to_ray_dataset(ray_module: Any, paths: list[str]) -> Any:
+    """Copy driver-local files into Ray's spillable object store.
+
+    Each payload is read and submitted separately so the driver's Python heap
+    does not retain the complete URL corpus. Ray owns the resulting blocks,
+    making them available to workers that do not share the driver's temporary
+    filesystem.
+    """
+
+    import pandas as pd
+
+    frame_refs = []
+    for path in paths:
+        frame = pd.DataFrame([{"bytes": Path(path).read_bytes(), "path": path}])
+        frame_refs.append(ray_module.put(frame))
+    return ray_module.data.from_pandas_refs(frame_refs)
+
+
 @dataclass
 class ExtractionBranchExecutor:
     """Run manifest extraction branches and common post-extraction stages."""
@@ -61,6 +80,7 @@ class ExtractionBranchExecutor:
     documents: list[str]
     buffers: list[tuple[str, BytesIO]]
     source_map: dict[str, str]
+    driver_local_paths: set[str]
     inline_rows: list[dict[str, str]]
     split_config: dict[str, Any]
     extract_params: Any | None
@@ -123,9 +143,13 @@ class ExtractionBranchExecutor:
                 extraction_mode=effective_extraction.extraction_mode,
             )
             file_paths, in_memory_rows = self._partition_branch_inputs(branch)
+            ray_managed_paths = [path for path in file_paths if path in self.driver_local_paths]
+            file_paths = [path for path in file_paths if path not in self.driver_local_paths]
             inputs: list[Any] = []
             if file_paths:
                 inputs.append(file_paths)
+            if ray_managed_paths:
+                inputs.append(_driver_local_files_to_ray_dataset(ray_module, ray_managed_paths))
             if in_memory_rows:
                 inputs.append(ray_module.data.from_items(in_memory_rows))
             for input_data in inputs:

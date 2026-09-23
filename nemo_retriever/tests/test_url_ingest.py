@@ -4,6 +4,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
+
 import httpx
 import pandas as pd
 import pytest
@@ -17,7 +20,7 @@ from nemo_retriever.common.url_fetch import (
     normalize_urls,
     restore_url_source_value,
 )
-from nemo_retriever.ingestor.branch_extraction import restore_source_urls
+from nemo_retriever.ingestor.branch_extraction import _driver_local_files_to_ray_dataset, restore_source_urls
 from nemo_retriever.ingestor.graph_ingestor import GraphIngestionError, GraphIngestor
 from nemo_retriever.service.client import FileUpload
 from nemo_retriever.service.service_ingestor import ServiceIngestor
@@ -279,6 +282,7 @@ def test_batch_url_path_restores_provenance_before_post_stages(monkeypatch, tmp_
     )
 
     def execute(executor):
+        assert executor.driver_local_paths == {str(fetched.local_path)}
         frame = pd.DataFrame([{"path": str(fetched.local_path), "metadata": {"source_path": str(fetched.local_path)}}])
         return restore_source_urls(frame, source_map=executor.source_map)
 
@@ -370,3 +374,100 @@ def test_adding_url_does_not_bypass_local_explicit_mode_validation(monkeypatch, 
             .extract(extraction_mode="pdf")
             .ingest()
         )
+
+
+def test_malformed_content_disposition_falls_back_to_response_mime(tmp_path) -> None:
+    from nemo_retriever.common import url_fetch
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={
+                "content-type": "application/pdf",
+                "content-disposition": 'attachment; filename="//[report.pdf"',
+            },
+            content=PDF_BYTES,
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        outcome = url_fetch._fetch_one(client, PDF_URL, 0, UrlFetchParams(), tmp_path)
+
+    assert isinstance(outcome, FetchedUrl)
+    assert outcome.input_type == "pdf"
+    assert outcome.local_path.read_bytes() == PDF_BYTES
+    cleanup_fetched_urls([outcome])
+
+
+def test_driver_local_url_files_move_into_ray_object_store(tmp_path) -> None:
+    first = tmp_path / "first.txt"
+    second = tmp_path / "second.txt"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+
+    class _FakeData:
+        def __init__(self) -> None:
+            self.refs = []
+
+        def from_pandas_refs(self, refs):
+            self.refs = refs
+            return "ray-dataset"
+
+    class _FakeRay:
+        def __init__(self) -> None:
+            self.data = _FakeData()
+            self.frames = []
+
+        def put(self, frame):
+            self.frames.append(frame.copy())
+            return f"ref-{len(self.frames)}"
+
+    ray_module = _FakeRay()
+
+    dataset = _driver_local_files_to_ray_dataset(ray_module, [str(first), str(second)])
+
+    assert dataset == "ray-dataset"
+    assert ray_module.data.refs == ["ref-1", "ref-2"]
+    assert [frame.iloc[0]["bytes"] for frame in ray_module.frames] == [b"first", b"second"]
+    assert [frame.iloc[0]["path"] for frame in ray_module.frames] == [str(first), str(second)]
+
+
+def test_async_service_cancellation_waits_for_fetch_cleanup(monkeypatch, tmp_path) -> None:
+    started = threading.Event()
+    release = threading.Event()
+    local_path = tmp_path / "cancelled.txt"
+
+    def blocking_fetch(urls, params):
+        started.set()
+        assert release.wait(timeout=5)
+        local_path.write_text("download completed after cancellation", encoding="utf-8")
+        return (
+            [
+                FetchedUrl(
+                    url=PDF_URL,
+                    local_path=local_path,
+                    content_type="text/plain",
+                    classification_filename="url-00000000.txt",
+                    input_type="txt",
+                    transport_path="url-source://00000000/url-00000000.txt",
+                )
+            ],
+            [],
+        )
+
+    monkeypatch.setattr("nemo_retriever.service.service_ingestor.fetch_urls", blocking_fetch)
+    ingestor = ServiceIngestor().urls(PDF_URL)
+
+    async def cancel_during_fetch() -> None:
+        event_task = asyncio.create_task(anext(ingestor.aingest_stream()))
+        assert await asyncio.to_thread(started.wait, 2)
+        event_task.cancel()
+        await asyncio.sleep(0.05)
+        assert not event_task.done()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await event_task
+
+    asyncio.run(cancel_during_fetch())
+
+    assert not local_path.exists()
+    assert ingestor._fetched_urls == []
