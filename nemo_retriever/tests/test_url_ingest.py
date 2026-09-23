@@ -9,9 +9,17 @@ import pandas as pd
 import pytest
 
 from nemo_retriever.common.params import UrlFetchParams
-from nemo_retriever.common.url_fetch import FetchedUrl, UrlFetchFailure, fetch_urls, normalize_urls
+from nemo_retriever.common.url_fetch import (
+    FetchedUrl,
+    UrlFetchFailure,
+    cleanup_fetched_urls,
+    fetch_urls,
+    normalize_urls,
+    restore_url_source_value,
+)
+from nemo_retriever.ingestor.branch_extraction import restore_source_urls
 from nemo_retriever.ingestor.graph_ingestor import GraphIngestionError, GraphIngestor
-from nemo_retriever.service.client import InMemoryUpload
+from nemo_retriever.service.client import FileUpload
 from nemo_retriever.service.service_ingestor import ServiceIngestor
 from nemo_retriever.service.services.pipeline_executor import _merge_document_metadata
 
@@ -35,7 +43,7 @@ def test_normalize_urls_rejects_non_http_sources(value: str) -> None:
         normalize_urls(value)
 
 
-def test_fetch_urls_dispatches_extensionless_pdf_from_content_type() -> None:
+def test_fetch_urls_dispatches_extensionless_pdf_from_content_type(tmp_path) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers["authorization"] == "Bearer secret"
         return httpx.Response(200, headers={"content-type": "application/pdf"}, content=PDF_BYTES)
@@ -45,12 +53,15 @@ def test_fetch_urls_dispatches_extensionless_pdf_from_content_type() -> None:
     from nemo_retriever.common import url_fetch
 
     with httpx.Client(transport=httpx.MockTransport(handler), headers={"Authorization": "Bearer secret"}) as client:
-        outcome = url_fetch._fetch_one(client, PDF_URL, 0, UrlFetchParams(headers={"Authorization": "Bearer secret"}))
+        outcome = url_fetch._fetch_one(
+            client, PDF_URL, 0, UrlFetchParams(headers={"Authorization": "Bearer secret"}), tmp_path
+        )
 
     assert isinstance(outcome, FetchedUrl)
     assert outcome.input_type == "pdf"
     assert outcome.classification_filename.endswith(".pdf")
-    assert outcome.content == PDF_BYTES
+    assert outcome.local_path.read_bytes() == PDF_BYTES
+    cleanup_fetched_urls([outcome])
 
 
 def test_fetch_urls_collects_http_and_size_failures(monkeypatch) -> None:
@@ -104,10 +115,12 @@ def test_graph_ingestor_raises_url_fetch_failures_by_default(monkeypatch) -> Non
         GraphIngestor().urls(PDF_URL).extract().ingest()
 
 
-def test_service_collect_inputs_builds_url_upload(monkeypatch) -> None:
+def test_service_collect_inputs_builds_url_upload(monkeypatch, tmp_path) -> None:
+    local_path = tmp_path / "url.pdf"
+    local_path.write_bytes(PDF_BYTES)
     fetched = FetchedUrl(
         url=PDF_URL,
-        content=PDF_BYTES,
+        local_path=local_path,
         content_type="application/pdf",
         classification_filename="url-00000000.pdf",
         input_type="pdf",
@@ -122,7 +135,8 @@ def test_service_collect_inputs_builds_url_upload(monkeypatch) -> None:
 
     assert len(inputs) == 1
     upload = inputs[0]
-    assert isinstance(upload, InMemoryUpload)
+    assert isinstance(upload, FileUpload)
+    assert upload.path == local_path
     assert upload.classification_filename == "url-00000000.pdf"
     assert upload.metadata == {"_nrl_source_url": PDF_URL}
 
@@ -140,7 +154,11 @@ def test_service_metadata_restores_original_url() -> None:
         ]
     )
 
-    _merge_document_metadata(result, {"_nrl_source_url": PDF_URL, "tenant": "test"})
+    _merge_document_metadata(
+        result,
+        {"_nrl_source_url": PDF_URL, "tenant": "test"},
+        source_identifier="url-source://00000000/url-00000000.pdf",
+    )
 
     assert result.iloc[0]["path"] == PDF_URL
     assert result.iloc[0]["metadata"]["source_path"] == PDF_URL
@@ -155,8 +173,200 @@ def test_service_ingest_returns_fetch_failure_without_contacting_service(monkeyp
         lambda urls, params: ([], [failure]),
     )
 
-    result, failures = ServiceIngestor(base_url="https://service.invalid").urls(PDF_URL).ingest(return_failures=True)
+    ingestor = ServiceIngestor(base_url="https://service.invalid").urls(PDF_URL)
+    ingestor._document_ids = ["old-document"]
+    result, failures = ingestor.ingest(return_failures=True)
 
     assert result.document_ids == []
     assert failures[0][0] == PDF_URL
     assert "HTTP 401" in failures[0][1]
+
+
+class _TinyTokenizer:
+    def __init__(self) -> None:
+        self._text = ""
+
+    def encode(self, text: str, *, add_special_tokens: bool = False) -> list[int]:
+        self._text = text
+        return list(range(len(text)))
+
+    def decode(self, ids: list[int], *, skip_special_tokens: bool = True) -> str:
+        return "".join(self._text[index] for index in ids)
+
+
+def _fetched_text(tmp_path, *, url: str = PDF_URL) -> FetchedUrl:
+    local_path = tmp_path / "url.txt"
+    local_path.write_text("URL ingestion works", encoding="utf-8")
+    return FetchedUrl(
+        url=url,
+        local_path=local_path,
+        content_type="text/plain",
+        classification_filename="url-00000000.txt",
+        input_type="txt",
+        transport_path="url-source://00000000/url-00000000.txt",
+    )
+
+
+def test_redirect_final_url_supplies_supported_suffix() -> None:
+    from nemo_retriever.common import url_fetch
+
+    response = httpx.Response(
+        200,
+        request=httpx.Request("GET", "https://cdn.example.test/report.pdf"),
+        headers={"content-type": "application/octet-stream"},
+    )
+
+    _, filename, input_type, _ = url_fetch._classify_response(PDF_URL, response, 0)
+
+    assert filename.endswith(".pdf")
+    assert input_type == "pdf"
+
+
+def test_unexpected_fetch_error_is_logged_and_reraised(monkeypatch, tmp_path, caplog) -> None:
+    from nemo_retriever.common import url_fetch
+
+    def raise_bug(*args):
+        raise RuntimeError("bug")
+
+    monkeypatch.setattr(url_fetch, "_classify_response", raise_bug)
+    with httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, content=b"body"))) as client:
+        with pytest.raises(RuntimeError, match="bug"), caplog.at_level("ERROR"):
+            url_fetch._fetch_one(client, PDF_URL, 0, UrlFetchParams(), tmp_path)
+
+    assert "Unexpected URL fetch failure at input position 0" in caplog.text
+
+
+@pytest.mark.parametrize("ingestor_type", [GraphIngestor, ServiceIngestor])
+def test_parameterless_url_append_retains_fetch_settings(ingestor_type) -> None:
+    ingestor = ingestor_type().urls(PDF_URL, headers={"Authorization": "Bearer token"}, max_concurrency=2)
+
+    ingestor.urls("https://example.test/second.pdf")
+
+    assert ingestor._url_fetch_params.headers == {"Authorization": "Bearer token"}
+    assert ingestor._url_fetch_params.max_concurrency == 2
+
+
+def test_url_page_provenance_preserves_suffix() -> None:
+    transport = "url-source://00000000/url-00000000.pdf"
+
+    assert restore_url_source_value(f"{transport}_1", {transport: PDF_URL}) == f"{PDF_URL}_1"
+
+
+def test_graph_ingestor_successfully_ingests_fetched_text(monkeypatch, tmp_path) -> None:
+    fetched = _fetched_text(tmp_path)
+    monkeypatch.setattr(
+        "nemo_retriever.ingestor.graph_ingestor.fetch_urls",
+        lambda urls, params: ([fetched], []),
+    )
+    monkeypatch.setattr(
+        "nemo_retriever.common.modality.txt.split._get_tokenizer",
+        lambda *args, **kwargs: _TinyTokenizer(),
+    )
+
+    result, failures = GraphIngestor(run_mode="inprocess").urls(PDF_URL).extract().ingest(return_failures=True)
+
+    assert failures == []
+    assert result["path"].tolist() == [PDF_URL]
+    assert result.iloc[0]["metadata"]["source_path"] == PDF_URL
+    assert not fetched.local_path.exists()
+
+
+def test_batch_url_path_restores_provenance_before_post_stages(monkeypatch, tmp_path) -> None:
+    fetched = _fetched_text(tmp_path)
+    monkeypatch.setattr(
+        "nemo_retriever.ingestor.graph_ingestor.fetch_urls",
+        lambda urls, params: ([fetched], []),
+    )
+
+    def execute(executor):
+        frame = pd.DataFrame([{"path": str(fetched.local_path), "metadata": {"source_path": str(fetched.local_path)}}])
+        return restore_source_urls(frame, source_map=executor.source_map)
+
+    monkeypatch.setattr("nemo_retriever.ingestor.graph_ingestor.ExtractionBranchExecutor.execute", execute)
+
+    result = GraphIngestor(run_mode="batch").urls(PDF_URL).extract().ingest()
+
+    assert result.iloc[0]["path"] == PDF_URL
+    assert result.iloc[0]["metadata"]["source_path"] == PDF_URL
+
+
+def test_explicit_pdf_mode_rejects_fetched_text(monkeypatch, tmp_path) -> None:
+    fetched = _fetched_text(tmp_path)
+    monkeypatch.setattr(
+        "nemo_retriever.ingestor.graph_ingestor.fetch_urls",
+        lambda urls, params: ([fetched], []),
+    )
+
+    with pytest.raises(ValueError, match="extraction_mode='pdf'"):
+        GraphIngestor(run_mode="inprocess").urls(PDF_URL).extract(extraction_mode="pdf").ingest()
+
+
+def test_service_ingest_upload_flow_restores_url_and_cleans_spool(monkeypatch, tmp_path) -> None:
+    fetched = _fetched_text(tmp_path)
+    observed = {}
+    monkeypatch.setattr(
+        "nemo_retriever.service.service_ingestor.fetch_urls",
+        lambda urls, params: ([fetched], []),
+    )
+
+    async def stream(self, files, **kwargs):
+        observed["upload"] = files[0]
+        assert files[0].path.read_text(encoding="utf-8") == "URL ingestion works"
+        yield {"event": "job_created", "job_id": "job-1"}
+        yield {"event": "upload_complete", "filename": files[0].filename, "document_id": "doc-1"}
+        yield {"event": "document_complete", "document_id": "doc-1", "status": "completed"}
+        yield {"event": "job_finalized", "job_id": "job-1"}
+
+    monkeypatch.setattr(
+        "nemo_retriever.service.client.RetrieverServiceClient.aingest_documents_stream",
+        stream,
+    )
+
+    result, failures = ServiceIngestor().urls(PDF_URL).ingest(return_results=False, return_failures=True)
+
+    assert isinstance(observed["upload"], FileUpload)
+    assert result.document_ids == ["doc-1"]
+    assert result.document_filenames == {"doc-1": PDF_URL}
+    assert failures == []
+    assert not fetched.local_path.exists()
+
+
+def test_service_upload_failure_uses_original_url(monkeypatch, tmp_path) -> None:
+    fetched = _fetched_text(tmp_path)
+    monkeypatch.setattr(
+        "nemo_retriever.service.service_ingestor.fetch_urls",
+        lambda urls, params: ([fetched], []),
+    )
+
+    async def stream(self, files, **kwargs):
+        yield {"event": "job_created", "job_id": "job-1"}
+        yield {"event": "upload_failed", "filename": files[0].filename, "error": "rejected"}
+        yield {"event": "job_failed", "job_id": "job-1"}
+
+    monkeypatch.setattr(
+        "nemo_retriever.service.client.RetrieverServiceClient.aingest_documents_stream",
+        stream,
+    )
+
+    _, failures = ServiceIngestor().urls(PDF_URL).ingest(return_results=False, return_failures=True)
+
+    assert failures == [(PDF_URL, "upload failed: rejected")]
+
+
+def test_adding_url_does_not_bypass_local_explicit_mode_validation(monkeypatch, tmp_path) -> None:
+    local_text = tmp_path / "local.txt"
+    local_text.write_text("local", encoding="utf-8")
+    fetched = _fetched_text(tmp_path, url="https://example.test/remote.txt")
+    monkeypatch.setattr(
+        "nemo_retriever.ingestor.graph_ingestor.fetch_urls",
+        lambda urls, params: ([fetched], []),
+    )
+
+    with pytest.raises(ValueError, match="local.txt"):
+        (
+            GraphIngestor(run_mode="inprocess")
+            .files(str(local_text))
+            .urls("https://example.test/remote.txt")
+            .extract(extraction_mode="pdf")
+            .ingest()
+        )
