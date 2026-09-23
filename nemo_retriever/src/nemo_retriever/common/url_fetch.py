@@ -140,7 +140,11 @@ def _content_disposition_filename(header: str) -> str:
 
 
 def _supported_suffix(name: str) -> str:
-    suffix = PurePosixPath(unquote(urlparse(name).path)).suffix.lower()
+    try:
+        parsed = urlparse(name)
+    except ValueError:
+        return ""
+    suffix = PurePosixPath(unquote(parsed.path)).suffix.lower()
     return suffix if suffix in AUTO_INPUT_EXTENSIONS else ""
 
 

@@ -1085,6 +1085,7 @@ class GraphIngestor(ingestor):
             documents=[*self._documents, *self._url_documents()],
             buffers=self._all_buffers(),
             source_map=self._effective_source_map(),
+            driver_local_paths=set(self._url_documents()),
             inline_rows=self._inline_text_rows(),
             split_config=self._split_config,
             extract_params=self._extract_params,

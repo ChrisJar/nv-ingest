@@ -77,7 +77,7 @@ import queue
 import threading
 import time
 import warnings
-from contextlib import nullcontext
+from contextlib import nullcontext, suppress
 from io import BytesIO
 from pathlib import Path
 from typing import Any, AsyncIterator, Iterator, List, Optional, Self, Sequence, Tuple, Union
@@ -1535,8 +1535,13 @@ class ServiceIngestor(ingestor):
         """Async generator yielding events as documents are processed."""
         result_schema = self._normalize_result_schema(result_schema)
         self._reset_run_state()
-        files = await asyncio.to_thread(self._collect_inputs)
+        collection_task = asyncio.create_task(asyncio.to_thread(self._collect_inputs))
         try:
+            try:
+                files = await asyncio.shield(collection_task)
+            except asyncio.CancelledError:
+                await self._finish_cancelled_input_collection(collection_task)
+                raise
             for event in self._url_failure_events():
                 yield event
             if not files:
@@ -1722,6 +1727,20 @@ class ServiceIngestor(ingestor):
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
+    @staticmethod
+    async def _finish_cancelled_input_collection(collection_task: asyncio.Task[list[UploadInput]]) -> None:
+        """Wait for a shielded preparation thread before its owner cleans up."""
+
+        while not collection_task.done():
+            try:
+                await asyncio.shield(collection_task)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        with suppress(Exception):
+            collection_task.result()
+
     def _reset_run_state(self) -> None:
         self._document_ids.clear()
         self._last_job_id = None
