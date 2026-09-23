@@ -61,8 +61,8 @@ chunks = ingestor.ingest()  # pandas.DataFrame (batch and inprocess)
 ```
 
 You can fetch supported content directly from HTTP and HTTPS URLs. URL requests
-run lazily when you call `.ingest()`, and each result retains its original URL
-as the source path.
+run lazily when you call `.ingest()`. Results retain the submitted URL in
+source identity fields, including after redirects.
 
 ```python
 from nemo_retriever import create_ingestor

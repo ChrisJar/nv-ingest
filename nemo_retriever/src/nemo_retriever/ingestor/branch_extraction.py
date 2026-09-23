@@ -13,6 +13,7 @@ from typing import Any, Callable
 
 from nemo_retriever.graph import InprocessExecutor, RayDataExecutor
 from nemo_retriever.graph.executor import call_pandas_function_on_arrow, preflight_executors
+from nemo_retriever.common.url_fetch import restore_url_source_value
 from nemo_retriever.graph.ingestor_runtime import (
     batch_tuning_to_node_overrides,
     build_graph,
@@ -40,16 +41,6 @@ def ensure_pandas_columns(batch_df: Any, *, columns: tuple[str, ...]) -> Any:
     return batch_df.loc[:, list(columns)]
 
 
-def _restore_value(value: Any, source_map: dict[str, str]) -> Any:
-    if isinstance(value, str):
-        return source_map.get(value, value)
-    if isinstance(value, dict):
-        return {key: _restore_value(item, source_map) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_restore_value(item, source_map) for item in value]
-    return value
-
-
 def restore_source_urls(batch_df: Any, *, source_map: dict[str, str]) -> Any:
     """Restore caller-facing URLs after suffix-bearing transport identifiers."""
 
@@ -57,7 +48,7 @@ def restore_source_urls(batch_df: Any, *, source_map: dict[str, str]) -> Any:
         return batch_df
     for column in ("path", "source_path", "source_id", "metadata"):
         if column in batch_df.columns:
-            batch_df[column] = batch_df[column].map(lambda value: _restore_value(value, source_map))
+            batch_df[column] = batch_df[column].map(lambda value: restore_url_source_value(value, source_map))
     return batch_df
 
 

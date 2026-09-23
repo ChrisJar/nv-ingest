@@ -114,7 +114,27 @@ class ingestor:
         )
 
     def urls(self, urls: Union[str, Sequence[str]], params: UrlFetchParams | None = None, **kwargs: Any) -> "ingestor":
-        """Add HTTP(S) URL sources for processing."""
+        """Add HTTP(S) URL sources for processing.
+
+        Parameters
+        ----------
+        urls
+            One absolute HTTP(S) URL or a sequence of URLs.
+        params
+            Shared URL-fetch configuration.
+        **kwargs
+            Field overrides for :class:`UrlFetchParams`.
+
+        Returns
+        -------
+        ingestor
+            This ingestor for fluent chaining.
+
+        Raises
+        ------
+        ValueError
+            If URL validation or fetch configuration validation fails.
+        """
         _ = _merge_params(params, kwargs)
         self._not_implemented("urls")
 

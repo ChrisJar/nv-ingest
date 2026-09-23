@@ -329,11 +329,15 @@ class IngestorCreateParams(_ParamsModel):
 class UrlFetchParams(_ParamsModel):
     """Controls for fetching documents configured with ``ingestor.urls()``."""
 
-    headers: dict[str, str] = Field(default_factory=dict)
-    request_timeout_s: float = Field(default=30.0, gt=0)
-    follow_redirects: bool = True
-    max_response_bytes: int = Field(default=10_000_000, ge=1)
-    max_concurrency: int = Field(default=8, ge=1)
+    headers: dict[str, str] = Field(default_factory=dict, description="HTTP request headers shared by all URL fetches.")
+    request_timeout_s: float = Field(
+        default=30.0, gt=0, description="Timeout in seconds passed to the HTTP client for URL fetch requests."
+    )
+    follow_redirects: bool = Field(default=True, description="Whether URL fetch requests follow HTTP redirects.")
+    max_response_bytes: int = Field(
+        default=10_000_000, ge=1, description="Maximum response size in bytes allowed for each URL."
+    )
+    max_concurrency: int = Field(default=8, ge=1, description="Maximum number of concurrent URL fetch requests.")
 
 
 class IngestExecuteParams(_ParamsModel):

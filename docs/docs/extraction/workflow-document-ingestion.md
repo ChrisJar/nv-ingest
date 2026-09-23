@@ -55,10 +55,12 @@ for url, error_message in failures:
     print(f"Could not ingest {url}: {error_message}")
 ```
 
-The result source path remains the submitted URL. URL fetching also works with
-`run_mode="inprocess"` and `run_mode="service"`. In service mode, the SDK
-client fetches the content before uploading it to the service. You can combine
-`.urls()` with local and in-memory inputs in one pipeline.
+The result `path`, `source_id`, and source metadata use the submitted URL as
+their base identity.
+Page-specific identities preserve their derived page suffix. URL fetching also
+works with `run_mode="inprocess"` and `run_mode="service"`. In service mode,
+the SDK client fetches the content before uploading it to the service. You can
+combine `.urls()` with local and in-memory inputs in one pipeline.
 
 For request headers, timeouts, redirects, response-size limits, concurrency,
 and failure behavior, refer to [Fetch content from

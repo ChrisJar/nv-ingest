@@ -51,10 +51,16 @@ mode, the client fetches the content and sends it to the Retriever service.
 
 The response must match an existing [supported input
 format](multimodal-extraction.md#supported-file-types-and-formats). NeMo
-Retriever Library uses the response content type and filename information to
-select the extraction path. HTML responses use the same MarkItDown conversion
-as local `.html` files. Results retain the submitted URL as the source path,
-including when the request follows a redirect.
+Retriever Library uses a recognized response content type and filename hints
+to select the extraction path. It checks `Content-Disposition`, the final URL
+after redirects, and then the submitted URL for filename hints. HTML responses
+use the same MarkItDown conversion as local `.html` files.
+
+Results retain the submitted URL as their base `path` and `source_id`,
+including when the request follows a redirect. Extractors can add their normal
+page suffix to a page-specific identity. NeMo Retriever Library preserves that
+suffix while replacing the internal transport name with the submitted URL
+before post-extraction stages such as embedding and `.vdb_upload()`.
 
 The following example fetches and extracts a PDF.
 
@@ -92,10 +98,25 @@ ingestor = create_ingestor(run_mode="inprocess").urls(
 )
 ```
 
-`UrlFetchParams` defaults to no custom headers, a 30-second request timeout,
-redirect following, a 10,000,000-byte response limit, and eight concurrent
-requests. The same settings apply to `inprocess`, `batch`, and `service` run
-modes.
+The following settings apply to `inprocess`, `batch`, and `service` run modes.
+
+| Field | Default | Behavior |
+| --- | --- | --- |
+| `headers` | `{}` | Adds the same request headers to every configured URL. |
+| `request_timeout_s` | `30.0` | Sets the timeout for each HTTP connect, read, write, and connection-pool operation. It is not an end-to-end ingest deadline. |
+| `follow_redirects` | `True` | Follows HTTP redirects. Redirect targets can provide filename hints, but they do not replace the submitted source URL. |
+| `max_response_bytes` | `10_000_000` | Rejects an individual response after it exceeds this many downloaded bytes. |
+| `max_concurrency` | `8` | Limits the number of concurrent URL fetches. |
+
+Repeated `.urls()` calls append sources. A call without `params` or keyword
+settings retains the existing `UrlFetchParams`. A later call with explicit
+settings replaces the shared fetch configuration for all URLs on that
+ingestor.
+
+NeMo Retriever Library streams each accepted response into managed temporary
+storage and removes that storage after ingestion. Service mode also streams
+the spooled content during upload. This keeps memory use bounded by active I/O
+instead of the total size of all fetched content.
 
 Invalid URLs and unsupported URL schemes raise a configuration error. HTTP
 error responses, timeouts, network failures, oversized responses, and
@@ -103,8 +124,10 @@ unsupported response formats are per-URL failures. Pass
 `return_failures=True` to keep successful results and receive failures as
 `(url, error_message)` tuples. Without that option, graph run modes raise
 `GraphIngestionError` for URL fetch failures. With that option, service mode
-returns `(ServiceIngestResult, failures)`. A normal service result also retains
-server-side document failures in `ServiceIngestResult.failures`.
+returns `(ServiceIngestResult, failures)`. In service mode, URL fetch, upload,
+and server-side document failures are also available in
+`ServiceIngestResult.failures`. URL fetch and upload failures identify the
+submitted URL instead of an internal transport filename.
 
 ### Select a supported extraction method
 
