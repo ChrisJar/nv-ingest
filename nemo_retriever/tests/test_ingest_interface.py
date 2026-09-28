@@ -118,6 +118,16 @@ def test_graph_ingestion_error_is_exported_from_top_level_package() -> None:
     assert nemo_retriever.GraphIngestionError is GraphIngestionError
 
 
+def test_graph_ingestor_ingest_documents_public_contract() -> None:
+    docstring = GraphIngestor.ingest.__doc__ or ""
+
+    assert "Parameters" in docstring
+    assert "Returns" in docstring
+    assert "Raises" in docstring
+    assert "return_failures" in docstring
+    assert "GraphIngestionError" in docstring
+
+
 def test_create_ingestor_rejects_unknown_kwargs() -> None:
     with pytest.raises(Exception):
         create_ingestor(run_mode="inprocess", unknown_field=True)

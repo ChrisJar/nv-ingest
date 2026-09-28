@@ -545,6 +545,9 @@ class _FakeDataset:
 
 
 class _FakeRayData:
+    def __init__(self) -> None:
+        self.item_rows: list[dict[str, Any]] = []
+
     def read_binary_files(self, paths: list[str], *, include_paths: bool) -> _FakeDataset:
         assert paths
         assert include_paths is True
@@ -552,11 +555,13 @@ class _FakeRayData:
 
     def from_items(self, rows: list[dict[str, Any]]) -> _FakeDataset:
         assert rows
+        self.item_rows.extend(rows)
         return _FakeDataset(list(rows[0]))
 
 
 class _FakeRay:
-    data = _FakeRayData()
+    def __init__(self) -> None:
+        self.data = _FakeRayData()
 
 
 class _LazySchemaDataset:
@@ -750,10 +755,11 @@ def test_batch_branch_preflight_counts_file_and_inline_datasets(monkeypatch, tmp
         assert reserved_cpus == 0
         calls.append("preflight")
 
+    ray_module = _FakeRay()
     monkeypatch.setattr(
         GraphIngestor,
         "_ensure_batch_runtime",
-        lambda self: (_FakeRay(), FakeCluster()),
+        lambda self: (ray_module, FakeCluster()),
     )
     monkeypatch.setattr("nemo_retriever.ingestor.branch_extraction.RayDataExecutor", FakeExecutor)
     monkeypatch.setattr("nemo_retriever.ingestor.branch_extraction.preflight_executors", fake_preflight)
@@ -763,3 +769,4 @@ def test_batch_branch_preflight_counts_file_and_inline_datasets(monkeypatch, tmp
     GraphIngestor(run_mode="batch").files([str(document)]).texts(["from inline"]).extract().ingest()
 
     assert calls == ["construct:1", "construct:0", "preflight", "build", "ingest"]
+    assert ray_module.data.item_rows == [{"bytes": b"from inline", "path": "inline://00000000"}]

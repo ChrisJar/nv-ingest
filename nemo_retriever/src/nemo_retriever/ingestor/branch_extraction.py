@@ -364,7 +364,7 @@ class ExtractionBranchExecutor:
         for path in branch.input_paths:
             row = inline_by_path.get(path)
             if row is not None:
-                in_memory_rows.append(row)
+                in_memory_rows.append({"bytes": row["text"].encode("utf-8"), "path": row["path"]})
             elif path in buffer_by_name:
                 in_memory_rows.append({"bytes": buffer_by_name[path].getvalue(), "path": path})
             else:

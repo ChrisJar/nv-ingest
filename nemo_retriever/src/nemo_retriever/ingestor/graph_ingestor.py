@@ -859,20 +859,12 @@ class GraphIngestor(ingestor):
     # ------------------------------------------------------------------
 
     def ingest(self, params: Any = None, **kwargs: Any) -> Any:
-        """Fetch configured URLs and execute the graph with managed spool cleanup."""
-        self._validate_input_sources(self._inline_texts)
-        self._prepare_url_inputs()
-        try:
-            return self._ingest_prepared(params, **kwargs)
-        finally:
-            self._cleanup_url_inputs()
-
-    def _ingest_prepared(self, params: Any = None, **kwargs: Any) -> Any:
-        """Build the operator graph and run it through the configured executor.
+        """Fetch configured URLs and execute the configured ingestion graph.
 
         Captioning automatically applies default image deduplication to
         non-image inputs unless an explicit dedup configuration disables both
-        deduplication passes.
+        deduplication passes. Fetched URL payloads are removed after execution,
+        including when graph construction or execution fails.
 
         Parameters
         ----------
@@ -882,22 +874,42 @@ class GraphIngestor(ingestor):
         **kwargs
             Execute-time flags passed directly. ``return_failures`` may be
             passed here and takes precedence over the value in ``params``.
-        return_failures
-            When ``True`` (default ``False``), return ``(result, failures)``
-            instead of raising collected row-level stage errors. If no explicit
+            It defaults to ``False``; when true, collected row-level and URL
+            failures are returned instead of raised. If no explicit
             remote-stage diagnostics are configured, all output columns are
             scanned for populated error fields so local collected failures can
-            still be returned; the default raise path remains scoped to
-            explicitly configured remote stages.
+            still be returned. The default raise path remains scoped to
+            explicitly configured remote stages and URL fetch failures.
 
         Returns
         -------
-        ``run_mode='batch'`` or ``run_mode='inprocess'``
-            A ``pandas.DataFrame``.
-        ``return_failures=True``
-            ``(result, failures)`` where ``failures`` is a list of
+        pandas.DataFrame
+            Extracted rows for ``run_mode='batch'`` or
+            ``run_mode='inprocess'``.
+        tuple[pandas.DataFrame, list[tuple[str, str]]]
+            ``(result, failures)`` when ``return_failures=True``. Failures use
             service-style ``(source, error)`` tuples.
+
+        Raises
+        ------
+        ValueError
+            If input sources, extraction settings, or execute-time parameters
+            are invalid or incompatible.
+        FileNotFoundError
+            If a configured local input cannot be read.
+        GraphIngestionError
+            If URL fetching or a collected graph stage fails and
+            ``return_failures`` is false.
         """
+        self._validate_input_sources(self._inline_texts)
+        self._prepare_url_inputs()
+        try:
+            return self._ingest_prepared(params, **kwargs)
+        finally:
+            self._cleanup_url_inputs()
+
+    def _ingest_prepared(self, params: Any = None, **kwargs: Any) -> Any:
+        """Execute ingestion after URL inputs have been fetched and classified."""
         return_failures = self._resolve_return_failures(params, kwargs)
         if (
             not self._documents
