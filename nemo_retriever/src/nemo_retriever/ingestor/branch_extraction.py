@@ -71,6 +71,26 @@ def _driver_local_files_to_ray_dataset(ray_module: Any, paths: list[str]) -> Any
     return ray_module.data.from_pandas_refs(frame_refs)
 
 
+def _filesystem_files_to_ray_dataset(ray_module: Any, paths: list[str]) -> Any:
+    """Create a Ray dataset for files visible to Ray workers."""
+
+    try:
+        return ray_module.data.read_binary_files(paths, include_paths=True)
+    except FileNotFoundError as exc:
+        from nemo_retriever.common.input_files import raise_input_path_not_found
+
+        raise_input_path_not_found(paths, exc)
+
+
+def _union_ray_datasets(datasets: list[Any]) -> Any:
+    """Union source datasets before applying a shared extraction graph."""
+
+    combined = datasets[0]
+    for dataset in datasets[1:]:
+        combined = combined.union(dataset)
+    return combined
+
+
 @dataclass
 class ExtractionBranchExecutor:
     """Run manifest extraction branches and common post-extraction stages."""
@@ -145,22 +165,22 @@ class ExtractionBranchExecutor:
             file_paths, in_memory_rows = self._partition_branch_inputs(branch)
             ray_managed_paths = [path for path in file_paths if path in self.driver_local_paths]
             file_paths = [path for path in file_paths if path not in self.driver_local_paths]
-            inputs: list[Any] = []
+            source_datasets: list[Any] = []
             if file_paths:
-                inputs.append(file_paths)
+                source_datasets.append(_filesystem_files_to_ray_dataset(ray_module, file_paths))
             if ray_managed_paths:
-                inputs.append(_driver_local_files_to_ray_dataset(ray_module, ray_managed_paths))
+                source_datasets.append(_driver_local_files_to_ray_dataset(ray_module, ray_managed_paths))
             if in_memory_rows:
-                inputs.append(ray_module.data.from_items(in_memory_rows))
-            for input_data in inputs:
-                executor = self._ray_executor(
-                    graph,
-                    derived_overrides,
-                    default_concurrency_node_names(effective_extraction.extract_params, None, None, None),
-                    source_cpu_reservation=1 if isinstance(input_data, list) else 0,
-                )
-                branch_executors.append(executor)
-                branch_inputs.append((executor, input_data))
+                source_datasets.append(ray_module.data.from_items(in_memory_rows))
+            input_data = _union_ray_datasets(source_datasets)
+            executor = self._ray_executor(
+                graph,
+                derived_overrides,
+                default_concurrency_node_names(effective_extraction.extract_params, None, None, None),
+                source_cpu_reservation=1 if file_paths else 0,
+            )
+            branch_executors.append(executor)
+            branch_inputs.append((executor, input_data))
 
         logger.info("Retriever ingest post-extraction stages: %s", format_post_stage_summary(self.post_extract_order))
         post_graph = build_post_extract_graph(

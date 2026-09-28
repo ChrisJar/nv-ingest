@@ -77,7 +77,7 @@ import queue
 import threading
 import time
 import warnings
-from contextlib import nullcontext, suppress
+from contextlib import nullcontext
 from io import BytesIO
 from pathlib import Path
 from typing import Any, AsyncIterator, Iterator, List, Optional, Self, Sequence, Tuple, Union
@@ -1738,8 +1738,10 @@ class ServiceIngestor(ingestor):
                 continue
             except Exception:
                 break
-        with suppress(Exception):
+        try:
             collection_task.result()
+        except Exception:
+            logger.exception("Service input collection failed while cancellation was being handled")
 
     def _reset_run_state(self) -> None:
         self._document_ids.clear()

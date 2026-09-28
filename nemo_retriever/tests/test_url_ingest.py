@@ -294,6 +294,92 @@ def test_batch_url_path_restores_provenance_before_post_stages(monkeypatch, tmp_
     assert result.iloc[0]["metadata"]["source_path"] == PDF_URL
 
 
+def test_batch_local_and_url_inputs_share_one_extraction_executor(monkeypatch, tmp_path) -> None:
+    local_path = tmp_path / "local.txt"
+    local_path.write_text("local", encoding="utf-8")
+    fetched = _fetched_text(tmp_path)
+    monkeypatch.setattr(
+        "nemo_retriever.ingestor.graph_ingestor.fetch_urls",
+        lambda urls, params: ([fetched], []),
+    )
+
+    class FakeDataset:
+        def __init__(self) -> None:
+            self.unioned = []
+
+        def union(self, other):
+            self.unioned.append(other)
+            return self
+
+        def schema(self, *, fetch_if_missing=False):
+            return None
+
+        def map_batches(self, *args, **kwargs):
+            return self
+
+    class FakeData:
+        def read_binary_files(self, paths, *, include_paths):
+            assert paths == [str(local_path)]
+            assert include_paths is True
+            return FakeDataset()
+
+        def from_pandas_refs(self, refs):
+            assert len(refs) == 1
+            return FakeDataset()
+
+    class FakeRay:
+        def __init__(self) -> None:
+            self.data = FakeData()
+
+        def put(self, frame):
+            assert frame.iloc[0]["path"] == str(fetched.local_path)
+            return object()
+
+    class FakeCluster:
+        def available_cpu_count(self):
+            return 4
+
+        def available_gpu_count(self):
+            return 1
+
+        def total_cpu_count(self):
+            return 4
+
+        def total_gpu_count(self):
+            return 1
+
+    executor_reservations = []
+    build_inputs = []
+
+    class FakeExecutor:
+        def __init__(self, *args, **kwargs):
+            self._source_cpu_reservation = kwargs["source_cpu_reservation"]
+            executor_reservations.append(self._source_cpu_reservation)
+
+        def build_dataset(self, data):
+            build_inputs.append(data)
+            return FakeDataset()
+
+        def ingest(self, data):
+            return pd.DataFrame({"done": [True]})
+
+    def fake_preflight(executors, resources, *, reserved_cpus=0):
+        assert len(executors) == 2
+        assert reserved_cpus == 0
+
+    monkeypatch.setattr(GraphIngestor, "_ensure_batch_runtime", lambda self: (FakeRay(), FakeCluster()))
+    monkeypatch.setattr("nemo_retriever.ingestor.branch_extraction.RayDataExecutor", FakeExecutor)
+    monkeypatch.setattr("nemo_retriever.ingestor.branch_extraction.preflight_executors", fake_preflight)
+    monkeypatch.setattr("nemo_retriever.ingestor.branch_extraction.build_graph", lambda **kwargs: object())
+    monkeypatch.setattr("nemo_retriever.ingestor.branch_extraction.build_post_extract_graph", lambda **kwargs: object())
+
+    GraphIngestor(run_mode="batch").files(str(local_path)).urls(PDF_URL).extract().ingest()
+
+    assert executor_reservations == [1, 0]
+    assert len(build_inputs) == 1
+    assert len(build_inputs[0].unioned) == 1
+
+
 def test_explicit_pdf_mode_rejects_fetched_text(monkeypatch, tmp_path) -> None:
     fetched = _fetched_text(tmp_path)
     monkeypatch.setattr(
@@ -471,3 +557,35 @@ def test_async_service_cancellation_waits_for_fetch_cleanup(monkeypatch, tmp_pat
 
     assert not local_path.exists()
     assert ingestor._fetched_urls == []
+
+
+def test_async_service_cancellation_logs_input_collection_failure(monkeypatch, caplog) -> None:
+    started = threading.Event()
+    release = threading.Event()
+
+    def failing_fetch(urls, params):
+        started.set()
+        assert release.wait(timeout=5)
+        raise OSError("could not write URL spool")
+
+    monkeypatch.setattr("nemo_retriever.service.service_ingestor.fetch_urls", failing_fetch)
+    ingestor = ServiceIngestor().urls(PDF_URL)
+
+    async def cancel_during_fetch() -> None:
+        event_task = asyncio.create_task(anext(ingestor.aingest_stream()))
+        assert await asyncio.to_thread(started.wait, 2)
+        event_task.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await event_task
+
+    with caplog.at_level("ERROR", logger="nemo_retriever.service.service_ingestor"):
+        asyncio.run(cancel_during_fetch())
+
+    records = [
+        record
+        for record in caplog.records
+        if record.message == "Service input collection failed while cancellation was being handled"
+    ]
+    assert len(records) == 1
+    assert isinstance(records[0].exc_info[1], OSError)
