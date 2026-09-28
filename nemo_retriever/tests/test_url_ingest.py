@@ -239,6 +239,28 @@ def test_unexpected_fetch_error_is_logged_and_reraised(monkeypatch, tmp_path, ca
     assert "Unexpected URL fetch failure at input position 0" in caplog.text
 
 
+def test_fetch_urls_cleans_spool_on_unexpected_failure(monkeypatch, tmp_path) -> None:
+    from nemo_retriever.common import url_fetch
+
+    spool_dir = tmp_path / "url-spool"
+
+    def make_spool_dir(*, prefix):
+        assert prefix == "nrl-url-fetch-"
+        spool_dir.mkdir()
+        return str(spool_dir)
+
+    def raise_bug(*args):
+        raise RuntimeError("bug")
+
+    monkeypatch.setattr(url_fetch.tempfile, "mkdtemp", make_spool_dir)
+    monkeypatch.setattr(url_fetch, "_fetch_one", raise_bug)
+
+    with pytest.raises(RuntimeError, match="bug"):
+        fetch_urls([PDF_URL], UrlFetchParams())
+
+    assert not spool_dir.exists()
+
+
 @pytest.mark.parametrize("ingestor_type", [GraphIngestor, ServiceIngestor])
 def test_parameterless_url_append_retains_fetch_settings(ingestor_type) -> None:
     ingestor = ingestor_type().urls(PDF_URL, headers={"Authorization": "Bearer token"}, max_concurrency=2)

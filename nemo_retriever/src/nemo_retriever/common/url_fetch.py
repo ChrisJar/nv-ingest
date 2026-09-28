@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import suppress
+from contextlib import ExitStack, suppress
 from dataclasses import dataclass
 from email.message import Message
 import logging
@@ -286,17 +286,21 @@ def fetch_urls(urls: Sequence[str], params: UrlFetchParams) -> tuple[list[Fetche
     Raises
     ------
     Exception
-        Unexpected implementation failures are logged with traceback and
-        re-raised rather than being downgraded to source failures.
+        Unexpected implementation failures propagate after managed spool
+        cleanup rather than being downgraded to source failures. Per-source
+        failures are logged with traceback by the fetch worker.
     """
 
     if not urls:
         return [], []
     spool_dir = Path(tempfile.mkdtemp(prefix="nrl-url-fetch-"))
-    timeout = httpx.Timeout(params.request_timeout_s)
-    limits = httpx.Limits(max_connections=params.max_concurrency, max_keepalive_connections=params.max_concurrency)
-    outcomes: list[FetchedUrl | UrlFetchFailure] = []
-    try:
+    with ExitStack() as cleanup:
+        cleanup.callback(shutil.rmtree, spool_dir, ignore_errors=True)
+        timeout = httpx.Timeout(params.request_timeout_s)
+        limits = httpx.Limits(
+            max_connections=params.max_concurrency,
+            max_keepalive_connections=params.max_concurrency,
+        )
         with httpx.Client(
             headers=params.headers,
             timeout=timeout,
@@ -310,13 +314,9 @@ def fetch_urls(urls: Sequence[str], params: UrlFetchParams) -> tuple[list[Fetche
                         enumerate(urls),
                     )
                 )
-    except Exception:
-        shutil.rmtree(spool_dir, ignore_errors=True)
-        raise
 
-    fetched = [outcome for outcome in outcomes if isinstance(outcome, FetchedUrl)]
-    failures = [outcome for outcome in outcomes if isinstance(outcome, UrlFetchFailure)]
-    if not fetched:
-        with suppress(OSError):
-            spool_dir.rmdir()
-    return fetched, failures
+        fetched = [outcome for outcome in outcomes if isinstance(outcome, FetchedUrl)]
+        failures = [outcome for outcome in outcomes if isinstance(outcome, UrlFetchFailure)]
+        if fetched:
+            cleanup.pop_all()
+        return fetched, failures
