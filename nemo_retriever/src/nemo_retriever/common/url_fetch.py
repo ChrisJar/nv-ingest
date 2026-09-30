@@ -19,37 +19,12 @@ from urllib.parse import unquote, urlparse
 
 import httpx
 
-from nemo_retriever.common.input_files import AUTO_INPUT_EXTENSIONS, input_type_for_path
+from nemo_retriever.common.input_files import AUTO_INPUT_EXTENSIONS, MIME_TYPE_TO_EXTENSION, input_type_for_path
 from nemo_retriever.common.params import UrlFetchParams
 
 
 logger = logging.getLogger(__name__)
 
-_MIME_DEFAULT_EXTENSIONS: dict[str, str] = {
-    "application/pdf": ".pdf",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
-    "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
-    "application/json": ".json",
-    "application/x-sh": ".sh",
-    "text/x-shellscript": ".sh",
-    "text/plain": ".txt",
-    "text/markdown": ".md",
-    "text/html": ".html",
-    "application/xhtml+xml": ".html",
-    "image/jpeg": ".jpg",
-    "image/png": ".png",
-    "image/tiff": ".tiff",
-    "image/bmp": ".bmp",
-    "image/svg+xml": ".svg",
-    "audio/mpeg": ".mp3",
-    "audio/wav": ".wav",
-    "audio/x-wav": ".wav",
-    "audio/mp4": ".m4a",
-    "video/mp4": ".mp4",
-    "video/quicktime": ".mov",
-    "video/x-matroska": ".mkv",
-    "video/x-msvideo": ".avi",
-}
 _GENERIC_MIME_TYPES = {"", "application/octet-stream", "binary/octet-stream"}
 
 
@@ -154,7 +129,7 @@ def _classify_response(url: str, response: httpx.Response, position: int) -> tup
     hinted_suffix = (
         _supported_suffix(disposition_name) or _supported_suffix(str(response.url)) or _supported_suffix(url)
     )
-    mime_suffix = _MIME_DEFAULT_EXTENSIONS.get(content_type, "")
+    mime_suffix = MIME_TYPE_TO_EXTENSION.get(content_type, "")
 
     if mime_suffix:
         suffix = hinted_suffix

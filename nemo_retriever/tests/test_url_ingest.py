@@ -107,6 +107,36 @@ def test_graph_ingestor_returns_url_fetch_failures(monkeypatch) -> None:
     assert failures == [(PDF_URL, "HTTP 404")]
 
 
+def test_graph_ingestor_fetches_extensionless_html_through_markitdown(monkeypatch) -> None:
+    url = "https://example.test/article"
+    html = b"<html><body><h1>URL acceptance</h1><p>Converted by MarkItDown.</p></body></html>"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == url
+        return httpx.Response(200, headers={"content-type": "text/html"}, content=html)
+
+    real_client = httpx.Client
+
+    def client_factory(**kwargs):
+        kwargs["transport"] = httpx.MockTransport(handler)
+        return real_client(**kwargs)
+
+    monkeypatch.setattr(httpx, "Client", client_factory)
+    monkeypatch.setattr(
+        "nemo_retriever.common.modality.txt.split._get_tokenizer",
+        lambda *args, **kwargs: _TinyTokenizer(),
+    )
+
+    result, failures = GraphIngestor(run_mode="inprocess").urls(url).extract().ingest(return_failures=True)
+
+    assert failures == []
+    assert result["path"].tolist() == [url]
+    assert result.iloc[0]["metadata"]["source_path"] == url
+    markdown = result.iloc[0]["text"]
+    assert "# URL acceptance" in markdown
+    assert "Converted by MarkItDown." in markdown
+
+
 def test_graph_ingestor_raises_url_fetch_failures_by_default(monkeypatch) -> None:
     failure = UrlFetchFailure(PDF_URL, "HTTPStatusError", "HTTP 500")
     monkeypatch.setattr(

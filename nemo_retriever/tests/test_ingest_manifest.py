@@ -751,8 +751,8 @@ def test_batch_branch_preflight_counts_file_and_inline_datasets(monkeypatch, tmp
             return pd.DataFrame({"done": [True]})
 
     def fake_preflight(executors: list[Any], resources: Any, *, reserved_cpus: float = 0.0) -> None:
-        assert [executor._source_cpu_reservation for executor in executors] == [1, 0]
-        assert reserved_cpus == 0
+        assert [executor._source_cpu_reservation for executor in executors] == [1, 0, 0]
+        assert reserved_cpus == 1
         calls.append("preflight")
 
     ray_module = _FakeRay()
@@ -768,5 +768,5 @@ def test_batch_branch_preflight_counts_file_and_inline_datasets(monkeypatch, tmp
 
     GraphIngestor(run_mode="batch").files([str(document)]).texts(["from inline"]).extract().ingest()
 
-    assert calls == ["construct:1", "construct:0", "preflight", "build", "ingest"]
-    assert ray_module.data.item_rows == [{"bytes": b"from inline", "path": "inline://00000000"}]
+    assert calls == ["construct:1", "construct:0", "construct:0", "preflight", "build", "build", "ingest"]
+    assert ray_module.data.item_rows == [{"text": "from inline", "path": "inline://00000000"}]

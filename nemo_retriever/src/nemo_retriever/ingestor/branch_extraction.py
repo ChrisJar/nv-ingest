@@ -165,22 +165,31 @@ class ExtractionBranchExecutor:
             file_paths, in_memory_rows = self._partition_branch_inputs(branch)
             ray_managed_paths = [path for path in file_paths if path in self.driver_local_paths]
             file_paths = [path for path in file_paths if path not in self.driver_local_paths]
-            source_datasets: list[Any] = []
-            if file_paths:
-                source_datasets.append(_filesystem_files_to_ray_dataset(ray_module, file_paths))
             if ray_managed_paths:
+                source_datasets: list[Any] = []
+                if file_paths:
+                    source_datasets.append(_filesystem_files_to_ray_dataset(ray_module, file_paths))
                 source_datasets.append(_driver_local_files_to_ray_dataset(ray_module, ray_managed_paths))
-            if in_memory_rows:
-                source_datasets.append(ray_module.data.from_items(in_memory_rows))
-            input_data = _union_ray_datasets(source_datasets)
-            executor = self._ray_executor(
-                graph,
-                derived_overrides,
-                default_concurrency_node_names(effective_extraction.extract_params, None, None, None),
-                source_cpu_reservation=1 if file_paths else 0,
-            )
-            branch_executors.append(executor)
-            branch_inputs.append((executor, input_data))
+                if in_memory_rows:
+                    source_datasets.append(ray_module.data.from_items(_as_binary_source_rows(in_memory_rows)))
+                inputs: list[Any] = [_union_ray_datasets(source_datasets)]
+            else:
+                inputs = []
+                if file_paths:
+                    inputs.append(file_paths)
+                if in_memory_rows:
+                    inputs.append(ray_module.data.from_items(in_memory_rows))
+            for input_data in inputs:
+                executor = self._ray_executor(
+                    graph,
+                    derived_overrides,
+                    default_concurrency_node_names(effective_extraction.extract_params, None, None, None),
+                    source_cpu_reservation=(
+                        1 if file_paths and (ray_managed_paths or isinstance(input_data, list)) else 0
+                    ),
+                )
+                branch_executors.append(executor)
+                branch_inputs.append((executor, input_data))
 
         logger.info("Retriever ingest post-extraction stages: %s", format_post_stage_summary(self.post_extract_order))
         post_graph = build_post_extract_graph(
@@ -364,12 +373,18 @@ class ExtractionBranchExecutor:
         for path in branch.input_paths:
             row = inline_by_path.get(path)
             if row is not None:
-                in_memory_rows.append({"bytes": row["text"].encode("utf-8"), "path": row["path"]})
+                in_memory_rows.append(row)
             elif path in buffer_by_name:
                 in_memory_rows.append({"bytes": buffer_by_name[path].getvalue(), "path": path})
             else:
                 file_paths.append(path)
         return file_paths, in_memory_rows
+
+
+def _as_binary_source_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Align inline text with binary source datasets only for URL branches."""
+
+    return [{"bytes": row["text"].encode("utf-8"), "path": row["path"]} if "text" in row else row for row in rows]
 
 
 def merge_node_overrides(
