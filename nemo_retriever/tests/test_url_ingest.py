@@ -123,7 +123,7 @@ def test_graph_ingestor_fetches_extensionless_html_through_markitdown(monkeypatc
 
     monkeypatch.setattr(httpx, "Client", client_factory)
     monkeypatch.setattr(
-        "nemo_retriever.common.modality.txt.split._get_tokenizer",
+        "nemo_retriever.common.modality.html.convert._get_txt_tokenizer",
         lambda *args, **kwargs: _TinyTokenizer(),
     )
 
