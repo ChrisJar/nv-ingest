@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
+import tempfile
 import threading
 
 import httpx
@@ -107,7 +109,20 @@ def test_graph_ingestor_returns_url_fetch_failures(monkeypatch) -> None:
     assert failures == [(PDF_URL, "HTTP 404")]
 
 
-def test_graph_ingestor_fetches_extensionless_html_through_markitdown(monkeypatch) -> None:
+@pytest.fixture(params=[False, True], ids=["system-temp", "symlinked-temp"])
+def url_spool_temp_root(request, monkeypatch, tmp_path):
+    if not request.param:
+        yield
+        return
+    # Exercise real mkdtemp/NamedTemporaryFile through a symlink, as on macOS.
+    with tempfile.TemporaryDirectory(prefix="nrl-url-test-") as directory:
+        alias = tmp_path / "temp-alias"
+        alias.symlink_to(directory, target_is_directory=True)
+        monkeypatch.setattr(tempfile, "tempdir", str(alias))
+        yield
+
+
+def test_graph_ingestor_fetches_extensionless_html_through_markitdown(monkeypatch, url_spool_temp_root) -> None:
     url = "https://example.test/article"
     html = b"<html><body><h1>URL acceptance</h1><p>Converted by MarkItDown.</p></body></html>"
 
@@ -135,6 +150,31 @@ def test_graph_ingestor_fetches_extensionless_html_through_markitdown(monkeypatc
     markdown = result.iloc[0]["text"]
     assert "# URL acceptance" in markdown
     assert "Converted by MarkItDown." in markdown
+
+
+def test_real_url_spool_paths_match_batch_provenance(monkeypatch, url_spool_temp_root) -> None:
+    real_client = httpx.Client
+
+    def client_factory(**kwargs):
+        kwargs["transport"] = httpx.MockTransport(
+            lambda request: httpx.Response(200, headers={"content-type": "text/plain"}, content=b"URL text")
+        )
+        return real_client(**kwargs)
+
+    monkeypatch.setattr(httpx, "Client", client_factory)
+    ingestor = GraphIngestor(run_mode="batch").urls(PDF_URL)
+    try:
+        ingestor._prepare_url_inputs()
+        path = ingestor._url_documents()[0]
+        assert path == str(Path(path).resolve())
+        assert ingestor._url_source_map == {path: PDF_URL}
+        frame = pd.DataFrame([{"path": str(Path(path).resolve()), "metadata": {"source_path": path}}])
+        restored = restore_source_urls(frame, source_map=ingestor._url_source_map)
+        assert restored.iloc[0]["path"] == PDF_URL
+        assert restored.iloc[0]["metadata"]["source_path"] == PDF_URL
+    finally:
+        ingestor._cleanup_url_inputs()
+    assert not Path(path).exists()
 
 
 def test_graph_ingestor_raises_url_fetch_failures_by_default(monkeypatch) -> None:

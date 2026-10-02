@@ -181,7 +181,9 @@ def _fetch_one(
                 dir=spool_dir,
                 delete=False,
             ) as spool:
-                local_path = Path(spool.name)
+                # Converters resolve source paths; use the same spelling for
+                # ingestion and provenance, including macOS /var symlinks.
+                local_path = Path(spool.name).resolve()
                 total = 0
                 for chunk in response.iter_bytes():
                     total += len(chunk)
