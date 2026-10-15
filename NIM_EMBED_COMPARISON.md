@@ -17,31 +17,44 @@ and text + image embeddings through the NIM embeddings API.
 
 ## Set up the environment
 
-Use Linux, Python 3.12, `uv`, Docker with NVIDIA GPU support, and an NVIDIA GPU
+Use Linux, Python 3.12, `uv`, `curl`, Docker with NVIDIA GPU support, and an NVIDIA GPU
 compatible with both images. Leave enough GPU memory for the embedding
 container and local extraction models together. Use an idle GPU for meaningful
 memory and throughput measurements.
 
-Clone this branch and install NRL with local extraction and benchmark
-dependencies:
+Clone the latest `main` from the official NVIDIA repository and install NRL
+with local extraction and benchmark dependencies:
 
 ```bash
-git clone --branch share/nim-embedding-reproduction \
-  https://github.com/ChrisJar/nv-ingest.git
-cd nv-ingest
+git clone --branch main --single-branch \
+  https://github.com/NVIDIA/NeMo-Retriever.git
+cd NeMo-Retriever
 uv python install 3.12
 uv venv retriever --python 3.12
 source retriever/bin/activate
 uv sync --project nemo_retriever --active --extra local --extra benchmarks --no-dev
+git rev-parse HEAD
 ```
 
-This checkout pins PyTorch 2.11.0 and torchvision 0.26.0. Its default Linux
-setup uses CUDA 13. Your NVIDIA driver must support that runtime. The script
-uses the installed NRL Python API, not `retriever-harness` or local embedding
-checkpoints.
+Record the printed commit when sharing results because `main` changes over
+time. Current `main` includes the tokenizer counting fix; no compatibility
+branch or local patch is required.
 
-Use `uv sync` so the checkout's dependency overrides and CUDA package sources
+Use `uv sync` so the official checkout's dependency overrides and CUDA package sources
 apply. A plain `uv pip install -e` does not apply all of those project settings.
+Your NVIDIA driver must support the CUDA runtime selected by that checkout.
+
+Download only the standalone comparison helper from the share repository:
+
+```bash
+curl --fail --location \
+  https://raw.githubusercontent.com/ChrisJar/nv-ingest/share/nim-embedding-reproduction/scripts/compare_embedding_nims.py \
+  --output scripts/compare_embedding_nims.py
+```
+
+The helper is separate from NRL. It uses the official installation's Python
+API, not library code from the share branch, `retriever-harness`, or local
+embedding checkpoints. Review the downloaded script before running it.
 
 Set the credentials and image references in your shell:
 
