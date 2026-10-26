@@ -170,6 +170,9 @@ def test_document_only_truncation_protects_query_and_full_image() -> None:
     parser._processor = MagicMock()
     parser._processor.tokenizer.encode.side_effect = lambda text, **kwargs: list(text)
     parser._processor.tokenizer.decode.side_effect = lambda tokens: "".join(tokens)
+    parser._processor.apply_chat_template.side_effect = lambda conversation, **kwargs: (
+        conversation[0]["content"][0]["text"] + conversation[1]["content"][0]["text"]
+    )
     image = object()
 
     def features(conversations: list) -> dict:
@@ -182,6 +185,54 @@ def test_document_only_truncation_protects_query_and_full_image() -> None:
     assert parser._fit_document("query", "abcdefghijkl", image, 12)[1]["content"][0]["text"] == "abcd"
     with pytest.raises(ValueError, match="query and image"):
         parser._fit_document("query", "doc", image, 7)
+
+
+@pytest.mark.parametrize("has_image", [False, True])
+def test_long_document_search_does_not_reprocess_image(has_image: bool) -> None:
+    reranker = object.__new__(Nemotron35RerankerHF)
+    reranker._processor = MagicMock()
+    tokenizer = reranker._processor.tokenizer
+    tokenizer.encode.side_effect = lambda text, **kwargs: list(text)
+    tokenizer.decode.side_effect = lambda tokens: "".join(tokens)
+    image = object() if has_image else None
+
+    def render(conversation: list, **kwargs: object) -> str:
+        assert kwargs == {"tokenize": False, "add_generation_prompt": False}
+        assert conversation[0]["content"][0]["text"] == "query"
+        if has_image:
+            assert conversation[1]["content"][1]["image"] is image
+        return "query:" + conversation[1]["content"][0]["text"] + ("[IMG]" if has_image else "")
+
+    reranker._processor.apply_chat_template.side_effect = render
+    image_token_cost = 100 if has_image else 0
+    reranker._features = MagicMock(
+        side_effect=lambda conversations: {
+            "attention_mask": torch.ones(
+                (1, len(render(conversations[0], tokenize=False, add_generation_prompt=False)) + image_token_cost)
+            )
+        }
+    )
+    document = "x" * 16000
+    budget = 10240
+    result = reranker._fit_document("query", document, image, budget)
+    assert len(render(result, tokenize=False, add_generation_prompt=False)) + image_token_cost == budget
+    assert result[1]["content"][0]["text"] == document[: budget - 6 - (105 if has_image else 0)]
+    reranker._features.assert_called_once()
+    # The binary search did actual text-only probes, not repeated image passes.
+    assert reranker._processor.apply_chat_template.call_count >= 14
+
+
+@pytest.mark.parametrize("model_class", [Nemotron35RerankerHF, Nemotron35Reranker])
+def test_scoring_still_checks_actual_expanded_length(model_class: type) -> None:
+    reranker = object.__new__(model_class)
+    reranker._device = "cpu"
+    reranker._model = MagicMock()
+    reranker._features = MagicMock(return_value=BatchFeature({"attention_mask": torch.ones((1, 13))}))
+    reranker._processor = MagicMock()
+    with pytest.raises(RuntimeError, match="exceed"):
+        reranker._score_conversations([rerank_messages("query", "doc", object())], 12)
+    reranker._model.assert_not_called()
+    reranker._model.encode.assert_not_called()
 
 
 def test_processor_disables_implicit_special_tokens_and_truncation() -> None:

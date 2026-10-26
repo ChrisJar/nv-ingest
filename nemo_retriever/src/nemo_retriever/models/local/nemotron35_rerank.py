@@ -133,11 +133,21 @@ class Nemotron35RerankerHF(BaseModel):
             processor_kwargs={"padding": True, "truncation": False, "add_special_tokens": False},
         )
 
+    def _text_length(self, conversation: list[dict[str, Any]]) -> int:
+        """Count rendered tokens without decoding or preprocessing the image."""
+        prompt = self._processor.apply_chat_template(conversation, tokenize=False, add_generation_prompt=False)
+        return len(self._processor.tokenizer.encode(prompt, add_special_tokens=False))
+
     def _fit_document(self, query: str, document: str, image: Any, max_length: int) -> list[dict[str, Any]]:
         conversation = rerank_messages(query, document, image)
-        if int(self._features([conversation])["attention_mask"].sum()) <= max_length:
+        expanded_length = int(self._features([conversation])["attention_mask"].sum())
+        if expanded_length <= max_length:
             return conversation
-        if int(self._features([rerank_messages(query, "", image)])["attention_mask"].sum()) > max_length:
+        # Image expansion depends on the unchanged image geometry. Measure its
+        # token cost once, retaining the image placeholder and exact chat template
+        # for text-only search probes. Scoring still checks the fully expanded input.
+        image_token_cost = expanded_length - self._text_length(conversation)
+        if self._text_length(rerank_messages(query, "", image)) + image_token_cost > max_length:
             raise ValueError("Reranker query and image exceed max_length even without document text.")
         tokenizer = self._processor.tokenizer
         tokens = tokenizer.encode(document, add_special_tokens=False)
@@ -145,7 +155,7 @@ class Nemotron35RerankerHF(BaseModel):
         while low < high:
             middle = (low + high + 1) // 2
             candidate = rerank_messages(query, tokenizer.decode(tokens[:middle]), image)
-            if int(self._features([candidate])["attention_mask"].sum()) <= max_length:
+            if self._text_length(candidate) + image_token_cost <= max_length:
                 low = middle
             else:
                 high = middle - 1
