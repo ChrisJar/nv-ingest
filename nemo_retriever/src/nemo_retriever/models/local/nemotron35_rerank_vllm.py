@@ -16,7 +16,7 @@ from nemo_retriever.models.inference.nemotron35_vllm import create_bidirectional
 class NRLNemotron35RerankModel(TransformersMultiModalForSequenceClassification):
     """Use mean pooling and the checkpoint's trained head without a sigmoid."""
 
-    default_seq_pooling_type = "MEAN"
+    default_seq_pooling_type: str = "MEAN"
 
     def create_attention_instances(self) -> dict[int, EncoderOnlyAttention]:
         """Construct encoder-only attention for this bidirectional text tower.
